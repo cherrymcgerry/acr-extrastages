@@ -107,8 +107,9 @@ Physics is **Kunos dmphysics**, not Chaos. The baked asset is a pre-cooked colli
   - A deferred task also calls `0x14504B660` for each entry of an array on the avatar.
 - **[I]** So runtime collider gathering from `CollisionProviderOwnerClasses` exists in shipping, alongside
   BakedData. Cooked Nanite render meshes normally lack CPU access, which is presumably why BakedData
-  exists. Which path supplies the road surface in practice is decided empirically by load-proof (b)
-  (`docs/load-proof.md`).
+  exists.
+- **[V] In-game (load-proof b):** an appended BakedData collider is driven on, so BakedData supplies the
+  road physics in shipping.
 
 ## 4. What a new stage must provide
 
@@ -137,7 +138,8 @@ Minimum, by layer. **[I]** unless marked; this is derived from what Hafren South
 
 ## 5. Open questions
 
-- [?] Does the game read the patched DT row and the edited BakedData? `docs/load-proof.md` answers both.
+- [V] The game reads both the patched DT row (menu length) and the edited BakedData (physics); see
+  `docs/load-proof.md`. The HUD route length comes from the route spline, not the DT.
 - [?] What does the gathering array on the TrackAvatar contain? (It's drained by the deferred task.)
   Would runtime colliders double up with baked ones?
 - [?] Is World Partition mandatory? Could a non-WP level with the same actors work (GameConfigurator

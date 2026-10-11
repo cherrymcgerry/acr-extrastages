@@ -46,6 +46,10 @@ Each entry: decision · evidence ([V] verified / [I] inferred) · consequences. 
 
   Static analysis cannot settle the second: [V] runtime collider gathering also exists in shipping (see
   `docs/acr-stage-anatomy.md` §3).
+- **Result (2026-10-11, in-game, user):**
+  - [V] `~mods/zz_*_P` IoStore overrides load (the DT length showed 42 km).
+  - [V] The appended BakedData ramp launched the car, so **baked collision drives physics** in shipping.
+  - [V] The HUD route length comes from the route spline, not the DT row.
 
 ## D5. Authoring route — recommendation: **hybrid**
 
@@ -93,6 +97,5 @@ roads.
    - If yes, use A for render meshes and level packages, and keep B tools for BakedData, DT rows and
      pacenotes.
    - If loading cooked stub content fails, fall back to a B-only "re-skin" scope.
-3. Decide on (2) only once `docs/load-proof.md` results are in. If test (b) shows BakedData is **not**
-   used, physics comes from the runtime path instead: CPU-accessible collision meshes on
-   `CollisionProviderOwnerClasses` actors. That again favours A for geometry.
+3. ~~Decide once `docs/load-proof.md` results are in.~~ Done: both load-proof tests passed, so B1 is
+   unblocked. Physics can be authored entirely by writing BakedData.

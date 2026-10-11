@@ -1,7 +1,19 @@
 # ACR load proof — install & test checklist (~5 min)
 
-Two independent mod containers. Both were built and **re-read offline with CUE4Parse** (verified), but
-**neither has been loaded by the game yet** — that is what this checklist establishes.
+Two independent mod containers, built and re-read offline with CUE4Parse.
+
+## Result (2026-10-11, user in-game test): both PASSED
+
+- **(a)** The stage-select card for **Afon Bidno - Severn** (variant **1/2**, FullForward) showed **42 km**.
+  IoStore containers in `Paks\~mods\*_P` mount and override base-game packages. [V]
+- **(b)** On that variant the car jumped at the invisible ramp shortly after the start. The baked collision
+  asset (`UBakedDataContainer`) **is used by the shipping game for driving physics**, and an appended
+  collider in the `None` stride set is live. [V]
+- The in-stage HUD route length still showed ~5.1 km. The HUD distance comes from the route
+  spline, not from `DT_TracksVariants.Length`, which only feeds the menus. [V]
+- Pitfall from the first attempt: variant **2/2** "Severn - Afon Bidno" is **FullReverse**. It isn't
+  patched, and its route reaches the ramp only at the finish, from the high side. Both variant names
+  contain "Afon Bidno".
 
 | Container | Overrides | What you should see |
 |---|---|---|
@@ -30,7 +42,8 @@ install only the `test` container first if you want to isolate test (a).
 
 ## 2. Test (a) — container mounts and overrides a cooked asset
 
-1. Start ACR, go to stage selection, choose **Wales → Afon Bidno** (track *Hafren South*), **forward** variant.
+1. Start ACR, go to stage selection, choose **Wales → Hafren South**, variant **1/2 "Afon Bidno - Severn"**
+   (not 2/2 "Severn - Afon Bidno", which is the reverse).
 2. Read the stage length on the info panel.
 
 - **42 km (or 42.0)** → IoStore mods in `~mods` load and override base-game assets (`_P` priority works). ✅
@@ -40,7 +53,7 @@ install only the `test` container first if you want to isolate test (a).
 
 ## 3. Test (b) — BakedData drives physics
 
-1. Start a stage (free roam / time trial, any car) on **Afon Bidno forward**.
+1. Start a stage (free practice, any car) on **Afon Bidno - Severn** (variant 1/2).
 2. After the countdown, drive straight down the road at 40–60 km/h. About **47 m after the start line**
    (the first stretch, before any notable corner) there is an invisible 6 m wide × 8 m long wedge that
    rises 1 m in the driving direction, spanning the road centre.
