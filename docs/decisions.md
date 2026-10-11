@@ -321,7 +321,8 @@ First stage: `new_zealand_rally_01_route_5` → `zz_acrdirt_nz01r5_P`. Built by 
     radius with the host's median for that severity.
   - In game [V]: the road is clearly visible with no green, the fences are solid, and respawn, the timer and frame rate
     are unchanged. Two faults remain: the calls drift late, and the trunks show as large orange panels (v1.5).
-- **v1.5: calls on their own corners; canopies drawn only at car height [V offline]:**
+- **v1.5: calls on their own corners; canopies drawn only at car height [V in game]:**
+  - In game: the pacenote calls seem correct and the trunks look OK. The stage is functionally complete.
   - ACR's pacenote convention [V offline]:
     - SplineDistanceM is metres along the CenterSpline from its first point. The host's corner rows fit their own
       CenterSpline best at shift 0 m and scale 1.000 (`acr-ref pacenote-survey --shift`). IdealSpline fits worse, and

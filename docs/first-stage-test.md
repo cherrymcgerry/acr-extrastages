@@ -455,3 +455,9 @@ corner):
 
 Report per checkpoint: whether the call came too early, on time, or too late, and whether the severity sounded right.
 If it's still late everywhere, try Pacenote Anticipation "Early" once and say whether that fixes it.
+
+**Result (in game):**
+- The pacenote calls now seem correct.
+- The trunks look OK.
+- With that, the single stage is functionally complete: physics, objects, timing, respawn and pacenotes. The rest
+  is presentation: Hafren South's scenery is still visible, and the menu still names the Welsh stage.
