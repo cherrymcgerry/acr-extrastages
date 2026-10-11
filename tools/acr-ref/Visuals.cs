@@ -18,12 +18,14 @@ internal static class Visuals
     ///             longer touches the visuals component
     ///   owner:    re-parent the visuals component to this actor (export name prefix, e.g. SplinesActor) and attach it
     ///             to its root, so actor-level hiding of the trigger does not apply either
-    internal sealed record Options(string Host, bool Retarget, string? Owner)
+    ///   vegetation: none (no non-solid geometry) | crowns (small tree crowns, see VisualObjects)
+    internal sealed record Options(string Host, bool Retarget, string? Owner, string Vegetation = "none")
     {
         public static Options From(IReadOnlyDictionary<string, string> named) => new(
             named.GetValueOrDefault("visuals-host", "start"),
             named.GetValueOrDefault("visuals-retarget", "1") != "0",
-            named.GetValueOrDefault("visuals-owner") is { Length: > 0 } ow ? ow : null);
+            named.GetValueOrDefault("visuals-owner") is { Length: > 0 } ow ? ow : null,
+            named.GetValueOrDefault("visuals-vegetation", "none"));
     }
 
     // by name: a round trip without the Blueprint containers cannot resolve the class imports
@@ -138,7 +140,7 @@ internal static class Visuals
         var sectionNames = new JsonArray("dummy", "terrain", "road", "posts", "gates");
         if (objects is not null && cfg.Num("objects", "enabled") != 0)
         {
-            var (objSecs, objRep) = VisualObjects.Build(ir, pl, cfg, objects, inPhysicsBounds);
+            var (objSecs, objRep) = VisualObjects.Build(ir, pl, cfg, objects, inPhysicsBounds, opt.Vegetation);
             foreach (var cls in VisualObjects.Classes.Where(c => objSecs[c].Idx.Count > 0))
             {
                 sections.Add(objSecs[cls]); mats.Add(Mat("object_materials", cls)); sectionNames.Add($"objects:{cls}");
@@ -195,7 +197,8 @@ internal static class Visuals
     }
 
     /// Offline check of the rebuilt component in a built (or round-tripped) cell.
-    public static int Check(LegacyPackage cell, StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, Options opt, TextWriter w)
+    public static int Check(LegacyPackage cell, StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, Options opt, TextWriter w,
+                            JsonNode? visualsReport = null, RoadProbe? probe = null)
     {
         int failures = 0;
         void C(bool ok, string what) { w.WriteLine($"{(ok ? "PASS" : "FAIL")} {what}"); if (!ok) failures++; }
@@ -236,6 +239,68 @@ internal static class Visuals
         long tris = secs.Sum(s => (long)s.Idx.Count / 3);
         double budget = cfg.Num("objects", "max_total_triangles");
         C(tris <= budget, $"visuals: {tris} triangles in total (budget {budget:0})");
+
+        // road corridor: nothing drawn may stand in the road unless a collider is there too (over road surface).
+        //   car height (car_height_min_m .. car_height_max_m): solid object sections at most to the collider limit
+        //     (max_penetration_m + road_overlap_tolerance_m); the render-only edge posts, centred on the gate edges, at
+        //     most 0.75 x their width
+        //   above (.. overhang_height_m): only inside a kept collider that the build reported there (trunks leaning over
+        //     the road, the start gantry)
+        //   crowns: not in the corridor in plan at any height
+        // The gates' banner spans the road at gate_height_m by design and is not checked.
+        if (probe is not null && visualsReport?["sections"] is JsonArray names && names.Count == n)
+        {
+            double tol = cfg.Num("objects", "road_overlap_tolerance_m") * 100, overhang = cfg.Num("objects", "overhang_height_m") * 100;
+            var colliders = (visualsReport["objects"]?["colliders_overhead_in_corridor"] as JsonArray ?? [])
+                .Select(x => (at: new Splines.V3(x!["at_cm"]![0]!.GetValue<double>(), x["at_cm"]![1]!.GetValue<double>(), x["at_cm"]![2]!.GetValue<double>()),
+                              reach: x["reach_cm"]!.GetValue<double>())).ToList();
+            for (int i = 0; i < n; i++)
+            {
+                var name = names[i]!.GetValue<string>();
+                if (name is "dummy" or "terrain" or "road" or "gates") continue;
+                bool soft = name == "objects:soft", isPosts = name == "posts";
+                double limit = isPosts ? cfg.Num("markers", "post_width_m") * 75 : soft ? 0 : probe.MaxPen + tol;
+                var s = secs[i];
+                double deepest = 0, deepestHigh = 0; int over = 0, high = 0, unexplained = 0;
+                for (int t = 0; t + 2 < s.Idx.Count; t += 3)
+                {
+                    Splines.V3 P(int k) { var v = s.Pos[(int)s.Idx[t + k]]; return new(v.X, v.Y, v.Z); }
+                    if (soft)
+                    {
+                        double d = probe.TriangleDepth(P(0), P(1), P(2), 50, -1e9, 1e9, surfaceOnly: false);
+                        deepest = Math.Max(deepest, d);
+                        if (d > 0.5) over++;
+                        continue;
+                    }
+                    double car = probe.TriangleDepth(P(0), P(1), P(2), 50, probe.HMin, probe.HMax);
+                    deepest = Math.Max(deepest, car);
+                    if (car > limit + 0.5) over++;
+                    double up = probe.TriangleDepth(P(0), P(1), P(2), 50, probe.HMax, overhang);
+                    if (up <= (isPosts ? limit : probe.MaxPen + tol) + 0.5) continue;
+                    high++; deepestHigh = Math.Max(deepestHigh, up);
+                    var g = (P(0) + P(1) + P(2)) * (1.0 / 3);
+                    if (!colliders.Any(cl => (g - cl.at).Length <= cl.reach + 1)) unexplained++;
+                }
+                if (soft)
+                    C(over == 0, $"visuals road corridor: crowns {s.Idx.Count / 3} triangles, deepest {deepest / 100:0.00} m inside the corridor in plan, {over} inside");
+                else
+                    C(over == 0 && unexplained == 0,
+                      $"visuals road corridor: {name} {s.Idx.Count / 3} triangles; at car height {probe.HMin / 100:0.#}..{probe.HMax / 100:0.#} m deepest {deepest / 100:0.00} m " +
+                      $"(limit {limit / 100:0.00} m), {over} over; above it to {overhang / 100:0.#} m {high} triangles in the corridor (deepest {deepestHigh / 100:0.0} m), " +
+                      $"{unexplained} not inside a reported overhead collider");
+            }
+            C(true, $"visuals road corridor: {colliders.Count} kept colliders reach over the road above car height (listed in the report)");
+            C(opt.Vegetation == "crowns" || !names.Any(x => x!.GetValue<string>() == "objects:soft"),
+              $"visuals: vegetation {opt.Vegetation}: {(names.Any(x => x!.GetValue<string>() == "objects:soft") ? "crown section present" : "no non-solid section")}");
+            if (visualsReport["objects"] is { } or)
+            {
+                double maxExt = cfg.Num("objects", "max_object_extent_m"), largest = or["largest_extent_m"]!.GetValue<double>();
+                C(largest <= maxExt, $"visuals: largest drawn object {largest:0.0} m in plan (limit {maxExt:0} m): {or["largest"]![0]}");
+                int ob = or["over_bounds"]!.GetValue<int>();
+                C(ob == 0, $"visuals: {ob} objects drawn wider than {cfg.Num("objects", "max_extent_over_bounds")} x their DR2 render bounds + 1 m");
+            }
+        }
+        else if (probe is not null) C(false, "visuals road corridor: section names missing from the report");
 
         // posts: 20 vertices each, centred on a gate edge point
         double spacing = cfg.Num("markers", "spacing_m");

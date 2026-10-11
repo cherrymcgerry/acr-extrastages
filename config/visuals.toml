@@ -27,10 +27,23 @@ max_mesh_triangles = 4000       # per instance; heavier render meshes (vehicles,
 prism_sides = 6                 # capsule colliders (tree trunks) drawn as n-sided prisms
 max_total_triangles = 3000000   # offline check budget for the whole visuals mesh
 tree_shape_classes = ["sSolidTreeLeafy", "sSolidPalmShortTree"]
+# v1.4: nothing non-solid is drawn (v1.3 drew ~8,800 bush/fern/flax/grass clumps as 9-17 m octahedra). The only
+# non-solid geometry left is the optional tree crowns (stage-build --visuals-vegetation crowns / build.ps1 -Vegetation).
+road_overlap_tolerance_m = 0.2  # a solid render mesh may reach max_penetration_m + this into the road corridor
+                                # (over road surface, from car_height_min_m up to overhang_height_m); deeper -> shapes
+overhang_height_m = 6
+max_object_extent_m = 40        # offline check: largest drawn object (plan), the biggest DR2 buildings are ~27 m
+max_extent_over_bounds = 1.15   # offline check: drawn plan extent / DR2 render-bounds plan extent (+ 1 m)
+crown_max_radius_m = 2.5        # crowns mode: octahedron radius <= min(this, 0.5 x smaller crown plan extent)
+crown_radius_factor = 0.5       #   x half the smaller plan extent of the DR2 crown bounds
+crown_bottom_fraction = 0.6     #   crown spans this fraction of the tree height .. the top
+crown_min_bottom_m = 3          #   crowns lower than this above the tree base are not drawn
+crown_road_margin_m = 1.5       #   plan clearance kept from the road edges; a crown is shrunk to fit or dropped
+crown_min_radius_m = 0.6
 
 [object_materials]
 # flat colours (SurfaceColor of each MI): trunks orange, wood yellow, metal violet (posts stay magenta), concrete blue,
-# rock cyan, plastic bright green, other (cars) black, soft (tree crowns, bushes, anything not solid) dark green
+# rock cyan, plastic bright green, other (cars) black, soft (tree crowns in crowns mode only) dark green
 trunks = "/Game/Data/Gameplay/PhysicalMaterials/MI_WallHayBale"
 wood = "/Game/Data/Gameplay/PhysicalMaterials/MI_WallWood"
 metal = "/Game/Data/Gameplay/PhysicalMaterials/MI_WallCloth"

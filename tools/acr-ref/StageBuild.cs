@@ -125,6 +125,7 @@ internal static class StageBuild
             report["options"]!["visuals_host"] = vo.Host;
             report["options"]!["visuals_retarget"] = vo.Retarget;
             report["options"]!["visuals_owner"] = vo.Owner;
+            report["options"]!["visuals_vegetation"] = vo.Vegetation;
         }
         var road = Road(ir, pl);
 
@@ -691,6 +692,12 @@ internal static class StageBuild
             pace.SetExportData(0, Pacenotes.Write(table, pace));
             pace.SaveTo(Path.Combine(outRoot, HostPaths.Pacenote + Path.GetExtension(ppath)));
             pr["host_rows_replaced"] = hostRows;
+            if (o.Named.GetValueOrDefault("pacenote-report") is { } reportPath)
+            {
+                var (mis, hints, corners) = Pacenotes.Report(table.Rows, curve, cell.StartS, pacenoteMap, ir.Name, reportPath);
+                pr["report"] = $"{reportPath}: {corners} corner calls, {mis} mismatches, {hints} severity hints";
+                Console.WriteLine($"pacenote report: {pr["report"]}");
+            }
             pr["spline_m"] = new JsonObject { ["start_line"] = Math.Round(cell.StartS, 1), ["finish_line"] = Math.Round(cell.FinishS, 1), ["stop"] = Math.Round(cell.StopS, 1) };
             r["pacenotes"] = pr;
             Console.WriteLine($"pacenotes: {hostRows} host rows -> {pr["rows"]} rows from {pr["dr2_tokens"]} DR2 tokens ({pr["dr2_tokens_mapped"]} mapped; " +
@@ -758,8 +765,12 @@ internal static class StageBuild
         {
             var vo = report["options"]!;
             var opt = new Visuals.Options(vo["visuals_host"]?.GetValue<string>() ?? "start",
-                vo["visuals_retarget"]?.GetValue<bool>() ?? false, vo["visuals_owner"]?.GetValue<string>());
-            failures += Visuals.Check(new LegacyPackage(HostPaths.Resolve(root, HostPaths.Cell)), ir, pl, Toml.Load(visualsCfg), opt, w);
+                vo["visuals_retarget"]?.GetValue<bool>() ?? false, vo["visuals_owner"]?.GetValue<string>(),
+                vo["visuals_vegetation"]?.GetValue<string>() ?? "none");
+            RoadProbe? probe = vo["objects"]?.GetValue<string>() is { } objCfg
+                ? new RoadProbe(Road(ir, pl), new SurfaceGrid(Path.Combine(ir.Dir, "collision.glb"), pl), Toml.Load(objCfg)) : null;
+            failures += Visuals.Check(new LegacyPackage(HostPaths.Resolve(root, HostPaths.Cell)), ir, pl, Toml.Load(visualsCfg), opt, w,
+                                      report["cell"]?["visuals"], probe);
         }
 
         var bpath = HostPaths.Resolve(root, HostPaths.Baked);

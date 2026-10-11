@@ -71,6 +71,59 @@ internal sealed class SurfaceGrid
     }
 }
 
+/// The road corridor rule of ObjectColliders: how deep (cm) a point reaches inside the gate edges over the road surface
+/// itself (not verge grass) within a height band above the centreline.
+internal sealed class RoadProbe
+{
+    public readonly RoadCorridor Road;
+    readonly SurfaceGrid _surfaces;
+    readonly HashSet<string> _roadSurfaces;
+    public readonly double MaxPen, HMin, HMax;   // cm
+
+    public RoadProbe(RoadCorridor road, SurfaceGrid surfaces, Toml cfg)
+    {
+        Road = road; _surfaces = surfaces;
+        _roadSurfaces = cfg.Arr("road", "surfaces").Cast<string>().ToHashSet();
+        MaxPen = cfg.Num("road", "max_penetration_m") * 100; HMin = cfg.Num("road", "car_height_min_m") * 100; HMax = cfg.Num("road", "car_height_max_m") * 100;
+    }
+
+    public bool OnRoadSurface(double x, double y) => _surfaces.At(x / 100, y / 100) is { } s && _roadSurfaces.Contains(s);
+
+    /// Depth inside the corridor of a point (plus radius), counted only within [z + hMin, z + hMax] and over road surface.
+    public double Depth(V3 q, double radius, double hMin, double hMax, bool surfaceOnly = true)
+    {
+        var (c, z, _) = Road.QueryNear(q.X, q.Y);
+        double cl = c - radius;
+        if (cl >= 0 || q.Z - radius >= z + hMax || q.Z + radius <= z + hMin) return 0;
+        if (!surfaceOnly) return -cl;
+        foreach (var (dx, dy) in new[] { (0.0, 0.0), (1, 0), (-1, 0), (0, 1), (0, -1) })
+            if (OnRoadSurface(q.X + dx * radius, q.Y + dy * radius)) return -cl;
+        return 0;
+    }
+
+    public double Depth(V3 q, double radius = 0) => Depth(q, radius, HMin, HMax);
+
+    /// Deepest sample of a triangle (barycentric grid, at most step cm apart); triangles whose plan circle around the
+    /// centroid stays outside the corridor are skipped.
+    public double TriangleDepth(V3 a, V3 b, V3 c, double step, double hMin, double hMax, bool surfaceOnly = true)
+    {
+        var g = (a + b + c) * (1.0 / 3);
+        double reach = Math.Max(Plan(a - g), Math.Max(Plan(b - g), Plan(c - g)));
+        if (Road.QueryNear(g.X, g.Y).clearance > reach) return 0;
+        int n = Math.Max(1, (int)Math.Ceiling(Math.Max(Plan(b - a), Math.Max(Plan(c - b), Plan(a - c))) / step));
+        double best = 0;
+        for (int i = 0; i <= n; i++)
+            for (int j = 0; i + j <= n; j++)
+            {
+                double u = (double)i / n, v = (double)j / n;
+                best = Math.Max(best, Depth(a * (1 - u - v) + b * u + c * v, 0, hMin, hMax, surfaceOnly));
+            }
+        return best;
+    }
+
+    static double Plan(V3 d) => Math.Sqrt(d.X * d.X + d.Y * d.Y);
+}
+
 internal static class ObjectColliders
 {
     public sealed class Box { public V3 Center; public double[] Rot = new double[3]; public double X, Y, Z; }
@@ -91,6 +144,7 @@ internal static class ObjectColliders
     {
         public List<Shape> Kept = new();
         public JsonObject Report = new();
+        public RoadProbe Probe = null!;
     }
 
     // ---- frames ----
@@ -158,7 +212,6 @@ internal static class ObjectColliders
                                Func<V3, bool> inPhysicsBounds, SurfaceGrid surfaces, IReadOnlyList<V3> centreUe)
     {
         var res = new Result();
-        var roadSurfaces = cfg.Arr("road", "surfaces").Cast<string>().ToHashSet();
         // which DR2 surfaces the road is made of, measured across the centreline (evidence for [road] surfaces)
         var hist = new SortedDictionary<string, int[]>();
         double[] offs = [0, 2, 4, 6];
@@ -183,7 +236,8 @@ internal static class ObjectColliders
         var templates = j["templates"]!.AsObject();
         var skipClasses = cfg.Arr("skip", "shape_classes").Cast<string>().ToHashSet();
         var skipBreaks = cfg.Arr("skip", "breaks_on_impulse").Cast<string>().ToHashSet();
-        double maxPen = cfg.Num("road", "max_penetration_m") * 100, hMin = cfg.Num("road", "car_height_min_m") * 100, hMax = cfg.Num("road", "car_height_max_m") * 100;
+        var probe = res.Probe = new RoadProbe(road, surfaces, cfg);
+        double maxPen = probe.MaxPen;
         int coneSeg = (int)cfg.Num("shapes", "cone_segments");
         var wallOverride = cfg["template_wall"];
 
@@ -297,21 +351,8 @@ internal static class ObjectColliders
                     }
 
                     // road corridor check at car height
-                    double pen = 0;
-                    foreach (var q in s.FootprintUe)
-                    {
-                        var (c, z, _) = road.Query(q.X, q.Y);
-                        double cl = c - s.FootprintRadius;
-                        if (cl >= 0 || q.Z - s.FootprintRadius >= z + hMax || q.Z + s.FootprintRadius <= z + hMin) continue;
-                        // inside the nominal gate width: only the road surface itself counts (not verge grass)
-                        bool onSurface = false;
-                        foreach (var (dx, dy) in new[] { (0.0, 0.0), (1, 0), (-1, 0), (0, 1), (0, -1) })
-                        {
-                            var sname = surfaces.At((q.X + dx * s.FootprintRadius) / 100, (q.Y + dy * s.FootprintRadius) / 100);
-                            if (sname is not null && roadSurfaces.Contains(sname)) { onSurface = true; break; }
-                        }
-                        if (onSurface) pen = Math.Max(pen, -cl);
-                    }
+                    double pen = Math.Max(s.FootprintUe.Max(q => probe.Depth(q, s.FootprintRadius)),
+                                          VisualObjects.ShapeDepth(s, probe, probe.HMin, probe.HMax));
                     if (pen > maxPen)
                     {
                         var key = $"{tname} ({wall})";

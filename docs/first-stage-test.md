@@ -338,3 +338,61 @@ Isolation switches if v1.3 misbehaves:
 Optional texture experiment (docs/visuals-plan.md): `work\acr\tex-proof\dist` is v1.3 with Hafren's own terrain blend
 and gravel road materials on the ground sections instead of grid and light blue. Install it like v1.3 and report how
 the ground looks (screenshot): textured, stretched, or a flat or black colour.
+
+**Result (user, in game, screenshot at 0.6 km, 03:01):**
+- Works:
+  - Orange trunks are visible and solid (collision confirmed).
+  - Co-driver calls play.
+  - Leaving the road respawns the car on the DR2 road (respawn confirmed).
+- Problem: dark-green non-solid shapes flood the view as huge flat panels. The road is hard to see, so fences and
+  signs were not found and the pacenotes could not be checked.
+- Cause: the soft-vegetation clumps have bounds 9–14 m wide but 1.5–3.4 m tall, and they were drawn as octahedra
+  over their rotated world box (up to about 17 m), many of them on the road edges. Fixed in v1.4.
+
+## v1.4 test: v1.3 without the green, nothing in the road unless solid, pacenote report
+
+`work\acr\dist-v1.4\zz_acrdirt_nz01r5_P.*`: same container name, so install only this one (remove v1.3's three files
+first). Build: `.\mods\acrdirt-stage\build.ps1 -Version v1.4 -Verify`.
+- Offline: CUE4Parse 11 PASS / 0 FAIL, round trip 42 PASS / 0 FAIL.
+- Sizes: ucas 327,522,107, utoc 61,023, pak 347.
+
+What changed from v1.3:
+- **No non-solid geometry:** 8,769 bushes, ferns, grass, cloth, light breakables and road-dropped objects are not
+  drawn at all. Tree crowns are off by default.
+- **Solid objects unchanged:** all 1,840 are drawn in their class colour. Trunks are orange; wood yellow; metal
+  violet; concrete blue; rock cyan; plastic bright green; cars black.
+- **No visuals in the road unless solid there (offline check):**
+  - At car height, nothing drawn reaches more than 0.5 m into the road over road surface.
+  - Above car height, up to 6 m, only real colliders reach in: 48 leaning pohutukawa trunks over the road and the
+    start gantry.
+  - 4 render meshes that reached in are drawn as their colliders: the start timer, a cattle-grid sign, a high
+    fence and a place sign.
+- **Collision fix:** 15 more collider shapes are dropped from the road (84 in total): 12 leaning pohutukawa trunks
+  and 3 scaffolding-banner frames. Their bodies crossed the road at car height between the points that v1.3
+  sampled. If something orange or violet stood in the road in v1.3 and was solid, this was probably it.
+- **Largest drawn object:** 31 m (the building); no object is drawn larger than its DR2 bounds.
+- **Triangles:** 1,289,685 (objects 278,749); the visuals export is 97.2 MB.
+- **Pacenote report:** `work\acr\pacenotes-nz01r5.md` has every call with its distance from the start line and the
+  DR2 corner measured there.
+  - 61 corner calls, of which 2 have the wrong direction:
+    - Left4 at 1,238 m: a right corner of 60° is there.
+    - Left4 at 2,146 m: a right corner of 83° is there.
+  - 15 severity hints, i.e. the radius is far off the host's typical radius for that number. Watch especially:
+    - Left5 at 380 m (75°, R 14 m);
+    - RightHP at 1,578 m (41°, R 45 m);
+    - Left6 at 1,656 m (183°, R 14 m);
+    - Left6 at 2,582 m (146°, R 17 m).
+
+Check:
+1. The road is clearly visible, with no green anywhere (default build).
+2. Fences, signs and gates: yellow and violet objects at the roadside. Touch one gently; it should be solid. Note
+   anything you can see on the road but drive through, or anything solid you cannot see, with the stage distance.
+3. Pacenotes: with the report open, check the 2 flagged Left4 calls and the 4 rows above. Is each call wrong, or
+   is the report wrong?
+4. As in v1.3: respawn, the timer, and frame rate (it should be the same or better: 87 k fewer triangles).
+
+Variant: `work\acr\dist-v1.4-crowns` (`-Vegetation crowns -Tag nz01r5-v1.4-crowns -Out work\acr\dist-v1.4-crowns`).
+- Adds 1,030 small dark-green crowns (8,240 triangles), at most 5 m wide, in the top 40 % of each tree and at least
+  1.5 m from the road edges. 457 crowns are dropped as too low, too small, or too close to the road.
+- Offline: 11 / 0 and 43 / 0. Sizes: ucas 329,648,179, utoc 61,407, pak 347.
+- Try it only if the default build looks good, and report whether the crowns help or clutter.

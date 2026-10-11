@@ -48,6 +48,46 @@ internal sealed class RoadCorridor
         }
         return best;
     }
+
+    const double NearCell = 2500, NearMargin = 1000;
+    Dictionary<(int, int), List<int>>? _near;
+
+    /// Query restricted to segments whose corridor comes within NearMargin of (x, y): exact when the clearance is
+    /// below NearMargin, (MaxValue, 0, -1) when no segment is that close.
+    public (double clearance, double z, int seg) QueryNear(double x, double y)
+    {
+        if (_near is null)
+        {
+            var g = new Dictionary<(int, int), List<int>>();
+            for (int i = 0; i + 1 < _c.Length; i++)
+            {
+                double r = Math.Max(Math.Max(_lw[i], _rw[i]), Math.Max(_lw[i + 1], _rw[i + 1])) + NearMargin;
+                int x0 = (int)Math.Floor((Math.Min(_c[i].X, _c[i + 1].X) - r) / NearCell), x1 = (int)Math.Floor((Math.Max(_c[i].X, _c[i + 1].X) + r) / NearCell);
+                int y0 = (int)Math.Floor((Math.Min(_c[i].Y, _c[i + 1].Y) - r) / NearCell), y1 = (int)Math.Floor((Math.Max(_c[i].Y, _c[i + 1].Y) + r) / NearCell);
+                for (int cx = x0; cx <= x1; cx++)
+                    for (int cy = y0; cy <= y1; cy++)
+                    {
+                        if (!g.TryGetValue((cx, cy), out var l)) g[(cx, cy)] = l = new List<int>();
+                        l.Add(i);
+                    }
+            }
+            _near = g;
+        }
+        (double c, double z, int seg) best = (double.MaxValue, 0, -1);
+        if (!_near.TryGetValue(((int)Math.Floor(x / NearCell), (int)Math.Floor(y / NearCell)), out var segs)) return best;
+        foreach (int i in segs)
+        {
+            var a = _c[i]; var b = _c[i + 1];
+            double ex = b.X - a.X, ey = b.Y - a.Y, l2 = ex * ex + ey * ey;
+            double u = l2 < 1e-9 ? 0 : Math.Clamp(((x - a.X) * ex + (y - a.Y) * ey) / l2, 0, 1);
+            double px = a.X + u * ex, py = a.Y + u * ey;
+            bool leftSide = Math.Sign(Cross2(ex, ey, x - px, y - py)) == _leftSign[i];
+            double hw = leftSide ? _lw[i] + u * (_lw[i + 1] - _lw[i]) : _rw[i] + u * (_rw[i + 1] - _rw[i]);
+            double d = Math.Sqrt((x - px) * (x - px) + (y - py) * (y - py)) - hw;
+            if (d < best.c) best = (d, a.Z + u * (b.Z - a.Z), i);
+        }
+        return best;
+    }
 }
 
 /// RespawnPlanes: 837 SplineMeshComponents (SM_RespawnWallCube, 20 x 0.2 x 10 m, query-only "Trigger" profile) whose

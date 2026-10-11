@@ -256,7 +256,10 @@ First stage: `new_zealand_rally_01_route_5` → `zz_acrdirt_nz01r5_P`. Built by 
   BakedSimpleCollisionData under the always-active None stride, reusing the host foliage actor as owner. Cones become
   small mesh colliders. Materials map to PM_Wall*. Soft vegetation and light or phantom breakables are skipped.
   Shapes that intrude more than 0.3 m into the road at car height (over a road surface code) are dropped and
-  reported. Visible from v1.3 (below).
+  reported. Visible from v1.3 (below). From v1.4 the intrusion is measured on the shape's hull triangles, not only
+  on footprint samples: a leaning trunk cone has its base ring below and its apex above the car-height band, so
+  sampling only those let its body cross the road at car height. This drops 15 more shapes (12 pohutukawa trunks, 3
+  scaffolding frames; 84 in total).
 - **Pacenotes [V offline]:**
   - The ACR table is a list of rows: SplineDistanceM (corner start along the CenterSpline), LengthM, and tokens.
     Severity 6 is the fastest, as in DR2. Right means a positive heading change in UE XY.
@@ -266,15 +269,16 @@ First stage: `new_zealand_rally_01_route_5` → `zz_acrdirt_nz01r5_P`. Built by 
   - Rows link (Into/And) only within one DR2 call. A "Finish" row sits 50 m before the line.
   - New FNames must be inserted at `NamesReferencedFromExportDataCount`: retoc keeps only that prefix for export
     data, and appended names are lost.
-- **Respawn walls [inferred]:**
+- **Respawn walls [V in game, v1.3]:**
   - The host's 837 respawn walls are unattached spline meshes in world space, so moving the root (v1) leaves
     them on Hafren's road; 8 of them overlap the DR2 road.
   - v2 rigidly re-lays them end to end along the DR2 out-of-bounds contour. Inserted RelativeLocation/Rotation and
     Z scale give a span from 30 m below to 15 m above the contour. Pieces closer than 3 m to the road, and spares,
     are sunk.
-  - Whether the game respawns from these walls alone, without host data we did not edit, is unverified until the
-    in-game test.
-- **v1.3 = v1.2 + the features above, with visible objects [V offline, in-game pending]:**
+  - The game respawns from these walls alone: in v1.3, leaving the road put the car back on the DR2 road.
+- **v1.3 = v1.2 + the features above, with visible objects [V in game, except the vegetation proxies]:**
+  - In game: trunks are visible and solid, co-driver calls play, and respawn works. The dark-green non-solid
+    proxies flooded the view, so v1.4 removes them (below).
   - The start-trigger mesh retarget from D6 (v1.2) is the confirmed visuals fix, and v1.3 keeps it.
   - The kept object colliders are also drawn, as extra sections of the same visuals mesh, one flat-colour
     `MI_Wall*` per class (`config/visuals.toml` `[objects]`, `[object_materials]`; `VisualObjects.cs`):
@@ -288,3 +292,30 @@ First stage: `new_zealand_rally_01_route_5` → `zz_acrdirt_nz01r5_P`. Built by 
   - Data quirk: `maple_02_e`'s trunk cone is tagged `sArmco` (guardrail). `config/object-collision.toml`
     `[template_wall]` gives it tree-trunk physics. This also changes v2 if rebuilt.
   - Pacenotes are unchanged from v2. `modifier_a_1` (2×) stays unmapped, because the code is not decoded.
+- **v1.4: no non-solid geometry, and nothing drawn in the road unless it is solid there [V offline]:**
+  - Cause of the v1.3 green flood: about 7,700 soft-vegetation clumps (pohutukawa bushes, large ferns, harakeke,
+    pampas, pohutukawa roots). Their DR2 render bounds are 9–14 m wide but only 1.5–3.4 m tall, with instance scales
+    up to 2.8.
+    - Each clump was drawn as an octahedron over the world-aligned box of its rotated bounds: up to about 17 m
+      across.
+    - Many stand on the road edges, so they read as flat green panels over the road.
+    - The 1,487 tree crowns (the upper 70 % of the bounds) were 10–15 m wide as well.
+  - Fix: non-solid objects are not drawn at all.
+    - `-Vegetation crowns` (`--visuals-vegetation`) adds a small octahedron per tree, high up:
+      - radius at most 2.5 m, and at most a quarter of the smaller plan extent of the DR2 crown;
+      - it spans the top 40 % of the tree;
+      - it is shrunk to stay 1.5 m from the road edges, or dropped.
+  - Render meshes that reach into the road deeper than the collider limit + 0.2 m (car height −1 to 6 m) are drawn
+    as their colliders instead. This affects 4 objects, among them the start timer and a cattle-grid sign.
+  - The offline check samples every drawn object triangle (50 cm grid) against the road corridor over road
+    surface:
+    - At car height, objects may reach at most 0.5 m in; edge posts, centred on the gate edges, at most 0.23 m.
+    - Above car height up to 6 m, a triangle in the corridor must lie inside one of the kept colliders that the
+      build reports there: 48 colliders, mostly leaning pohutukawa trunks, plus the start gantry beam.
+    - Crowns must not enter the corridor in plan at any height.
+    - Two size checks: the largest drawn object must be ≤ 40 m in plan (the biggest is the 31 m building), and no
+      object may be drawn wider than 1.15 × its DR2 render bounds + 1 m.
+  - Pacenote report (`--pacenote-report`, written to `work/acr/pacenotes-<short>.md`): each row with its
+    start-line distance, the call, and the strongest geometric corner within ±20 m. A corner call is flagged when
+    the direction is wrong, or when a tight call has no corner there. A severity hint compares the corner's minimum
+    radius with the host's median for that severity.
