@@ -19,13 +19,15 @@ internal static class Visuals
     ///   owner:    re-parent the visuals component to this actor (export name prefix, e.g. SplinesActor) and attach it
     ///             to its root, so actor-level hiding of the trigger does not apply either
     ///   vegetation: none (no non-solid geometry) | crowns (small tree crowns, see VisualObjects)
-    internal sealed record Options(string Host, bool Retarget, string? Owner, string Vegetation = "none")
+    ///   canopies: overrides [objects] canopies (clip | full | none)
+    internal sealed record Options(string Host, bool Retarget, string? Owner, string Vegetation = "none", string? Canopies = null)
     {
         public static Options From(IReadOnlyDictionary<string, string> named) => new(
             named.GetValueOrDefault("visuals-host", "start"),
             named.GetValueOrDefault("visuals-retarget", "1") != "0",
             named.GetValueOrDefault("visuals-owner") is { Length: > 0 } ow ? ow : null,
-            named.GetValueOrDefault("visuals-vegetation", "none"));
+            named.GetValueOrDefault("visuals-vegetation", "none"),
+            named.GetValueOrDefault("visuals-canopies") is { Length: > 0 } cn ? cn : null);
     }
 
     // by name: a round trip without the Blueprint containers cannot resolve the class imports
@@ -140,7 +142,7 @@ internal static class Visuals
         var sectionNames = new JsonArray("dummy", "terrain", "road", "posts", "gates");
         if (objects is not null && cfg.Num("objects", "enabled") != 0)
         {
-            var (objSecs, objRep) = VisualObjects.Build(ir, pl, cfg, objects, inPhysicsBounds, opt.Vegetation);
+            var (objSecs, objRep) = VisualObjects.Build(ir, pl, cfg, objects, inPhysicsBounds, opt.Vegetation, opt.Canopies);
             foreach (var cls in VisualObjects.Classes.Where(c => objSecs[c].Idx.Count > 0))
             {
                 sections.Add(objSecs[cls]); mats.Add(Mat("object_materials", cls)); sectionNames.Add($"objects:{cls}");
@@ -298,6 +300,13 @@ internal static class Visuals
                 C(largest <= maxExt, $"visuals: largest drawn object {largest:0.0} m in plan (limit {maxExt:0} m): {or["largest"]![0]}");
                 int ob = or["over_bounds"]!.GetValue<int>();
                 C(ob == 0, $"visuals: {ob} objects drawn wider than {cfg.Num("objects", "max_extent_over_bounds")} x their DR2 render bounds + 1 m");
+                if (or["shapes_vs_colliders"] is { } sv)
+                {
+                    int compared = sv["compared"]!.GetValue<int>(), bad = sv["mismatches"]!.GetValue<int>();
+                    C(compared > 0 && bad == 0, $"visuals: {compared} drawn collider shapes vs their colliders: {bad} outside by > 2 cm or under {cfg.Num("objects", "shape_min_fill")} fill"
+                                         + $" (max outside {sv["max_outside_collider_cm"]} cm, min fill {sv["min_fill"]})" + (bad > 0 ? $": {sv["first"]![0]}" : ""));
+                }
+                if (or["canopies"] is { } cn) C(true, $"visuals: canopies {cn}");
             }
         }
         else if (probe is not null) C(false, "visuals road corridor: section names missing from the report");

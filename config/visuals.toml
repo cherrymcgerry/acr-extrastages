@@ -40,6 +40,12 @@ crown_bottom_fraction = 0.6     #   crown spans this fraction of the tree height
 crown_min_bottom_m = 3          #   crowns lower than this above the tree base are not drawn
 crown_road_margin_m = 1.5       #   plan clearance kept from the road edges; a crown is shrunk to fit or dropped
 crown_min_radius_m = 0.6
+# DR2 tree canopies are inverted cone colliders (wide end up, ~3 m radius, apex ~1.5 m above the ground); drawn whole
+# they are the large orange panels seen in v1.4. The colliders are kept as DR2 has them either way.
+canopies = "clip"               # clip: draw only the part below canopy_clip_height_m above the tree base | full | none
+canopy_clip_height_m = 2.5      #   car height band
+shape_min_fill = 0.8            # offline check: drawn shape bounds / collider bounds per axis (prisms and capsule tips
+                                #   are inscribed; short tilted capsules fill ~0.84)
 
 [object_materials]
 # flat colours (SurfaceColor of each MI): trunks orange, wood yellow, metal violet (posts stay magenta), concrete blue,

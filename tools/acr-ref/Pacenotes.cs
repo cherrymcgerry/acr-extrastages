@@ -159,6 +159,49 @@ internal static class Pacenotes
         int diff = Enumerable.Range(0, Math.Min(rt.Length, orig.Length)).FirstOrDefault(i => rt[i] != orig[i], -1);
         Console.WriteLine($"{table.Rows.Count} rows; writer round trip {(rt.AsSpan().SequenceEqual(orig) ? "byte-identical" : $"DIFFERS at {diff} of {orig.Length} (written {rt.Length}): orig {Convert.ToHexString(orig, Math.Max(0, diff - 8), Math.Min(32, orig.Length - Math.Max(0, diff - 8)))} new {Convert.ToHexString(rt, Math.Max(0, diff - 8), Math.Min(32, rt.Length - Math.Max(0, diff - 8)))}")}");
         var cell = new LegacyPackage(HostPaths.Resolve(root, HostPaths.Cell));
+        if (o.Named.ContainsKey("locations"))
+        {
+            // each row's SavedLocation projected onto each spline: UE arc length (reparam table) vs SplineDistanceM
+            var lines = new[] { "CenterSpline", "IdealSpline" }.ToDictionary(n => n, n =>
+                Splines.SplitComponent(cell.GetExportData(cell.FindExport(n, "DMSplineComponent"))).Curves);
+            foreach (var (n, c) in lines)
+                Console.WriteLine($"{n}: {c.Position.Points.Count} points, UE length {c.Reparam.Points[^1].InVal / 100:0.0} m, looped {c.Position.Looped}");
+            Console.WriteLine("row key      SplineDistanceM  LengthM  | Center s  lat   diff | Ideal s  lat   diff | tokens");
+            foreach (var r in table.Rows)
+            {
+                var q = r.SavedLocation;
+                var cols = lines.Values.Select(c => { var (s, lat) = ArcLength(c, q[0], q[1]); return $"{s,8:0.0} {lat,5:0.0} {r.SplineDistanceM - s,6:0.0}"; });
+                Console.WriteLine($"{r.Key,-10} {r.SplineDistanceM,10:0.0} {r.LengthM,8:0.0}  | {string.Join(" | ", cols)} | {string.Join(' ', r.Tokens)}{(r.LinkToNext ? " ->" : "")}");
+            }
+            return 0;
+        }
+        if (o.Named.ContainsKey("shift"))
+        {
+            // signed agreement of the host's tight corner rows (severity 1-4, HP, square) with each spline's geometry, with
+            // the rows shifted by d metres (or scaled about the spline start): the peak shows which spline, which origin
+            // and which scale SplineDistanceM is on
+            var tight = new System.Text.RegularExpressions.Regex(@"^(Left|Right)([1-4]|HP|Square)$");
+            var rows = table.Rows.Select(r => (r, t: r.Tokens.FirstOrDefault(tight.IsMatch))).Where(x => x.t is not null).ToList();
+            foreach (var n in new[] { "CenterSpline", "IdealSpline" })
+            {
+                var c = Splines.SplitComponent(cell.GetExportData(cell.FindExport(n, "DMSplineComponent"))).Curves;
+                var pts = c.Position.Points.Select(p => (p.Out[0] / 100, p.Out[1] / 100)).ToList();
+                var s = Enumerable.Range(0, pts.Count).Select(i => c.Reparam.Points.MinBy(p => Math.Abs(p.Out[0] - i))!.InVal / 100.0).ToArray();
+                var cv = Curvature.FromPoints(pts, s);
+                double Score(Func<double, double> f) => rows.Sum(x =>
+                {
+                    double t = cv.Turn(f(x.r.SplineDistanceM), f(x.r.SplineDistanceM + x.r.LengthM));
+                    return (x.t!.StartsWith("Right") ? 1 : -1) * Math.Clamp(t, -90, 90);
+                }) / rows.Count;
+                var shifts = Enumerable.Range(-30, 61).Select(k => (d: k * 10.0, v: Score(x => x + k * 10.0))).ToList();
+                var scales = Enumerable.Range(-20, 41).Select(k => (k: 1 + k * 0.0025, v: Score(x => x * (1 + k * 0.0025)))).ToList();
+                var bs = shifts.MaxBy(x => x.v); var bk = scales.MaxBy(x => x.v);
+                Console.WriteLine($"{n}: {rows.Count} tight rows; mean signed turn (deg, clamped 90) at shift 0: {Score(x => x):0.0}; best shift {bs.d:+0;-0} m ({bs.v:0.0}); " +
+                                  $"best scale {bk.k:0.0000} ({bk.v:0.0}); at shift -242.5 (start-line origin): {Score(x => x - 242.5):0.0}");
+                Console.WriteLine("  shift: " + string.Join(" ", shifts.Where(x => x.d % 50 == 0).Select(x => $"{x.d:+0;-0}:{x.v:0}")));
+            }
+            return 0;
+        }
         var cs = Splines.SplitComponent(cell.GetExportData(cell.FindExport("CenterSpline", "DMSplineComponent"))).Curves;
         var curve = Curvature.FromPoints(cs.Position.Points.Select(p => (p.Out[0] / 100, p.Out[1] / 100)).ToList());
         Console.WriteLine($"host CenterSpline {curve.Length:0.#} m; start line (RaceSector0) at s = {curve.Project(-974.4664, 936.1725):0.#} m");
@@ -180,12 +223,35 @@ internal static class Pacenotes
         return 0;
     }
 
+    /// UE arc length (m) and lateral distance (m) of world point (x, y) cm on a spline: projected onto the control
+    /// polygon for the key parameter, then mapped through the reparam table (distance -> key).
+    public static (double s, double lateral) ArcLength(Splines.SplineCurves c, double x, double y)
+    {
+        var p = c.Position.Points;
+        double best = double.MaxValue, key = 0;
+        for (int i = 0; i + 1 < p.Count; i++)
+        {
+            double ax = p[i].Out[0], ay = p[i].Out[1], ex = p[i + 1].Out[0] - ax, ey = p[i + 1].Out[1] - ay, l2 = ex * ex + ey * ey;
+            double u = l2 < 1e-9 ? 0 : Math.Clamp(((x - ax) * ex + (y - ay) * ey) / l2, 0, 1);
+            double dx = ax + u * ex - x, dy = ay + u * ey - y, d2 = dx * dx + dy * dy;
+            if (d2 < best) { best = d2; key = p[i].InVal + u * (p[i + 1].InVal - p[i].InVal); }
+        }
+        var rp = c.Reparam.Points;
+        for (int i = 0; i + 1 < rp.Count; i++)
+            if (key <= rp[i + 1].Out[0])
+            {
+                double k0 = rp[i].Out[0], k1 = rp[i + 1].Out[0], u = k1 > k0 ? Math.Clamp((key - k0) / (k1 - k0), 0, 1) : 0;
+                return ((rp[i].InVal + u * (rp[i + 1].InVal - rp[i].InVal)) / 100, Math.Sqrt(best) / 100);
+            }
+        return (rp[^1].InVal / 100, Math.Sqrt(best) / 100);
+    }
+
     static double Median(IEnumerable<double> v) { var a = v.OrderBy(x => x).ToArray(); return a.Length == 0 ? double.NaN : a[a.Length / 2]; }
 
     // ---------------- DR2 -> ACR generation ----------------
 
     public sealed record Dr2Token(int Call, int Subcall, double GateDistance, string Kind, string? Direction, string? Severity,
-                                  double? DistanceCall, string[] Modifiers);
+                                  double? DistanceCall, string[] Modifiers, double DistanceM = 0, int Angle = 0, int DelayMs = 0);
 
     public static List<Dr2Token> LoadTokens(string stageJson)
     {
@@ -194,7 +260,8 @@ internal static class Pacenotes
             t!["call"]!.GetValue<int>(), t["subcall"]!.GetValue<int>(), t["gate_distance"]!.GetValue<double>(),
             t["kind"]!.GetValue<string>(), t["direction"]?.GetValue<string>(), t["severity"]?.GetValue<string>(),
             t["distance_call_m"]?.GetValue<double>(),
-            t["modifiers"]?.AsArray().Select(m => m!.GetValue<string>()).ToArray() ?? [])).ToList();
+            t["modifiers"]?.AsArray().Select(m => m!.GetValue<string>()).ToArray() ?? [],
+            t["distance_m"]?.GetValue<double>() ?? 0, t["angle"]?.GetValue<int>() ?? 0, t["delay_ms"]?.GetValue<int>() ?? 0)).ToList();
     }
 
     /// Median min radius (m) per severity on the host stage (pacenote-survey on Hafren South): the yardstick for the
@@ -210,12 +277,12 @@ internal static class Pacenotes
     ///   DIRECTION: no corner of the called direction there, but one of the other direction of at least 20 deg
     ///   NO CORNER: a tight call (severity 1-4, hairpin, square) with no geometric corner there and < 10 deg over the row
     /// The severity hint (min radius vs the host's median for that severity, outside 0.4x..2.5x) is not a mismatch.
-    public static (int mismatches, int hints, int corners) Report(List<Row> rows, Curvature curve, double startS, Toml m, string stage, string path)
+    public sealed record Check(double S, string Call, string Measured, string Flag, string Hint, string Line);
+
+    static (List<Check> rows, int mismatches, int hints, int corners) CheckRows(List<Row> rows, List<Corner> corners, Curvature curve, double startS)
     {
-        var corners = FindCorners(curve, m);
         var re = new System.Text.RegularExpressions.Regex(@"^(Left|Right)(\d|HP|AcuteHP|OpenHP|Square|Flat|Kink)$");
-        var sb = new System.Text.StringBuilder();
-        var lines = new List<string>();
+        var lines = new List<Check>();
         int mismatches = 0, hints = 0, cornerRows = 0;
         foreach (var r in rows)
         {
@@ -224,7 +291,7 @@ internal static class Pacenotes
             var tok = r.Tokens.Select(t => re.Match(t)).FirstOrDefault(x => x.Success);
             if (tok is null)
             {
-                lines.Add($"| {s - startS,7:0} | {r.LengthM,4:0} | {call} | | | | |");
+                lines.Add(new(s, call, "", "", "", $"| {s - startS,7:0} | {r.LengthM,4:0} | {call} | | | | |"));
                 continue;
             }
             cornerRows++;
@@ -249,11 +316,78 @@ internal static class Pacenotes
                 hint = minR < hr * 0.4 ? $"tighter than a typical {sev} (~{hr:0} m)" : $"wider than a typical {sev} (~{hr:0} m)";
                 hints++;
             }
-            lines.Add($"| {s - startS,7:0} | {r.LengthM,4:0} | {call} | {(sign > 0 ? "right" : "left")} {sev} | {measured} | {flag} | {hint} |");
+            lines.Add(new(s, call, measured, flag, hint, $"| {s - startS,7:0} | {r.LengthM,4:0} | {call} | {(sign > 0 ? "right" : "left")} {sev} | {measured} | {flag} | {hint} |"));
         }
+        return (lines, mismatches, hints, cornerRows);
+    }
+
+    /// Markdown report for the generated rows (and, if given, the same calls placed by the v1.4 greedy assignment):
+    /// per DR2 corner call its read point, where each version puts the row and the lead between them, the drift per
+    /// 500 m, v1.4's flagged rows re-checked, and every row with the geometry there.
+    public static (int mismatches, int hints, int corners) Report(List<Row> rows, Curvature curve, double startS, Toml m, string stage, string path,
+                                                                  List<Placement>? now = null, List<Row>? oldRows = null, List<Placement>? old = null)
+    {
+        var corners = FindCorners(curve, m);
+        var sb = new System.Text.StringBuilder();
+        var (lines, mismatches, hints, cornerRows) = CheckRows(rows, corners, curve, startS);
         sb.AppendLine($"# Pacenotes vs DR2 centreline: {stage}");
         sb.AppendLine();
         sb.AppendLine($"Generated by stage-build. {rows.Count} rows, {cornerRows} corner calls, **{mismatches} mismatches**, {hints} severity hints.");
+        sb.AppendLine();
+        sb.AppendLine("Distances are metres from the start line along the rebuilt CenterSpline: the scale the game uses for `SplineDistanceM` " +
+                      "(verified on the host table: its corner rows fit its CenterSpline best at shift 0 m and scale 1.000; acr-ref pacenote-survey --shift). " +
+                      "The game calls a row about LookAheadTime (Normal 5.75 s) before the car reaches it, at a reference speed from the spline's curvature (DA_PacenoteConfig).");
+        sb.AppendLine();
+        if (now is not null && old is not null && oldRows is not null)
+        {
+            var (_, oldMis, oldHints, _) = CheckRows(oldRows, corners, curve, startS);
+            string Key(Placement p) => $"{p.Call}.{p.Subcall}";
+            var o = old.ToDictionary(Key);
+            var pairs = now.Where(p => o.ContainsKey(Key(p))).Select(p => (n: p, o: o[Key(p)])).OrderBy(x => x.n.Call).ThenBy(x => x.n.Subcall).ToList();
+            sb.AppendLine("## Drift: v1.4 (greedy) vs v1.5 (aligned)");
+            sb.AppendLine();
+            sb.AppendLine($"- v1.4: {oldMis} mismatches, {oldHints} severity hints; v1.5: {mismatches} mismatches, {hints} severity hints.");
+            sb.AppendLine($"- Corner calls on geometry: v1.4 {old.Count(p => p.Localised)} of {old.Count}, v1.5 {now.Count(p => p.Localised)} of {now.Count}.");
+            sb.AppendLine($"- Rows that moved by more than 30 m: {pairs.Count(x => Math.Abs(x.n.Start - x.o.Start) > 30)}.");
+            sb.AppendLine("- *Lead* = row start − DR2 read point. DR2 reads a note 50–150 m before its corner, so the first subcall of a call should sit there; " +
+                          "a lead well above that means the row is on a later corner than the one DR2 called.");
+            sb.AppendLine();
+            sb.AppendLine("| DR2 read point (m) | first-subcall calls | v1.4 mean lead (m) | v1.4 max | v1.5 mean lead (m) | v1.5 max | v1.4 − v1.5 mean shift (m) |");
+            sb.AppendLine("|---|---:|---:|---:|---:|---:|---:|");
+            foreach (var g in pairs.Where(x => x.n.Subcall == 0).GroupBy(x => (int)((x.n.Read - startS) / 500)).OrderBy(g => g.Key))
+                sb.AppendLine($"| {g.Key * 500}–{g.Key * 500 + 500} | {g.Count()} | {g.Average(x => x.o.Start - x.o.Read):0} | {g.Max(x => x.o.Start - x.o.Read):0} | " +
+                              $"{g.Average(x => x.n.Start - x.n.Read):0} | {g.Max(x => x.n.Start - x.n.Read):0} | {g.Average(x => x.o.Start - x.n.Start):+0;-0;0} |");
+            sb.AppendLine();
+            sb.AppendLine("## Every corner call");
+            sb.AppendLine();
+            sb.AppendLine("| DR2 call | Called | DR2 angle | DR2 read (m) | v1.4 row (m) | v1.4 lead | v1.5 row (m) | v1.5 lead | v1.4 − v1.5 (m) | Corner at the v1.5 row |");
+            sb.AppendLine("|---|---|---:|---:|---:|---:|---:|---:|---:|---|");
+            foreach (var (n, ol) in pairs)
+            {
+                var c = corners.Where(k => k.End >= n.Start - 5 && k.Start <= n.End + 5 && Math.Sign(k.Turn) == n.Want).MaxBy(k => Math.Abs(k.Turn));
+                string geo = c is null ? (n.Localised ? "" : "fallback (no corner of this direction matched)")
+                    : $"{(c.Turn > 0 ? "right" : "left")} {Math.Abs(c.Turn):0}°, min R {curve.MinRadius(c.Start, c.End):0} m{(n.Localised ? "" : " (fallback)")}";
+                double d = ol.Start - n.Start;
+                sb.AppendLine($"| {n.Call}.{n.Subcall} | {n.Token} | {n.Angle} | {n.Read - startS:0} | {ol.Start - startS:0} | {ol.Start - ol.Read:0} | " +
+                              $"{n.Start - startS:0} | {n.Start - n.Read:0} | {(Math.Abs(d) > 30 ? $"**{d:+0;-0}**" : $"{d:+0;-0;0}")} | {geo} |");
+            }
+            sb.AppendLine();
+            sb.AppendLine("## v1.4's flagged rows, re-checked");
+            sb.AppendLine();
+            sb.AppendLine("| v1.4 row (m) | Call | v1.4 flag | DR2 call | v1.5 row (m) | v1.5 measured | v1.5 flag |");
+            sb.AppendLine("|---:|---|---|---|---:|---|---|");
+            var (oldLines, _, _, _) = CheckRows(oldRows, corners, curve, startS);
+            foreach (var ol in oldLines.Where(x => x.Flag.Length > 0 || x.Hint.Length > 0))
+            {
+                var op = old.Where(p => Math.Abs(p.Start - ol.S) < 6).MinBy(p => Math.Abs(p.Start - ol.S));
+                var np = op is null ? null : now.FirstOrDefault(p => Key(p) == Key(op));
+                var nl = np is null ? null : lines.Where(x => x.Measured.Length > 0).MinBy(x => Math.Abs(x.S - np.Start));
+                sb.AppendLine($"| {ol.S - startS:0} | {ol.Call} | {ol.Flag}{(ol.Flag.Length > 0 && ol.Hint.Length > 0 ? "; " : "")}{ol.Hint} | {(op is null ? "?" : Key(op))} | " +
+                              $"{(np is null ? "" : $"{np.Start - startS:0}")} | {nl?.Measured} | {(nl is null ? "" : (nl.Flag + (nl.Flag.Length > 0 && nl.Hint.Length > 0 ? "; " : "") + nl.Hint) is { Length: > 0 } f ? f : "ok")} |");
+            }
+            sb.AppendLine();
+        }
+        sb.AppendLine("## Rows (v1.5)");
         sb.AppendLine();
         sb.AppendLine("- *Distance*: metres from the start line along the rebuilt CenterSpline (the in-game stage distance), where the row starts; *L*: row length.");
         sb.AppendLine("- *Measured*: the strongest geometric corner on the DR2 centreline overlapping the row ±20 m (heading change, its extent, smallest radius over a 10 m window); right = clockwise seen from above.");
@@ -262,7 +396,7 @@ internal static class Pacenotes
         sb.AppendLine();
         sb.AppendLine("| Distance (m) | L (m) | Call | Called | Measured | Mismatch | Severity hint |");
         sb.AppendLine("|---:|---:|---|---|---|---|---|");
-        foreach (var l in lines) sb.AppendLine(l);
+        foreach (var l in lines) sb.AppendLine(l.Line);
         File.WriteAllText(path, sb.ToString());
         return (mismatches, hints, cornerRows);
     }
@@ -295,11 +429,82 @@ internal static class Pacenotes
         public string? Conj;          // forced conjunction (from a DR2 distance call)
         public bool Localised;
         public int Call;              // DR2 call (one recorded phrase): rows of the same call are linked
+        public int Subcall, Angle, Want;
+        public double Read;           // DR2 read point on the spline
+    }
+
+    /// v1.4: each corner call takes the first not yet used geometric corner of its direction starting within
+    /// [read - back, read + ahead]. One early mismatch (two subcalls in one merged corner) shifts every later call
+    /// by a corner until the window forces a reset.
+    static int[] AssignGreedy(List<Placed> calls, List<Corner> corners, double back, double ahead)
+    {
+        var hit = Enumerable.Repeat(-1, calls.Count).ToArray();
+        int last = -1;
+        for (int j = 0; j < calls.Count; j++)
+            for (int i = last + 1; i < corners.Count; i++)
+            {
+                if (corners[i].Start > calls[j].Read + ahead) break;
+                if (corners[i].Start >= calls[j].Read - back && Math.Sign(corners[i].Turn) == calls[j].Want) { hit[j] = i; last = i; break; }
+            }
+        return hit;
+    }
+
+    /// Order-preserving alignment of the DR2 corner calls (in spoken order) to the geometric corners, minimising a
+    /// cost: the lead (corner start - DR2 read point) outside DR2's lead window (first subcall lead_first_m, later
+    /// subcalls lead_later_m; docs/dr2-formats.md: notes are read 50-150 m before their corner), a severity term, and
+    /// unplaced_cost per call left to the fallback. Directions must match. Consecutive subcalls of one call with the
+    /// same direction may share one geometric corner (a merged "right 2 into right 1").
+    static int[] AssignAligned(List<Placed> calls, List<Corner> corners, Curvature curve, Toml m)
+    {
+        var first = m.Arr("layout", "lead_first_m").Cast<double>().ToArray();
+        var later = m.Arr("layout", "lead_later_m").Cast<double>().ToArray();
+        double scale = m.Num("layout", "lead_cost_scale_m"), unplaced = m.Num("layout", "unplaced_cost"), share = m.Num("layout", "share_cost");
+        double maxLead = m.Num("layout", "lead_max_m"), back = m.Num("layout", "search_back_m");
+        var minR = corners.Select(c => curve.MinRadius(c.Start, c.End)).ToArray();
+        double Cost(int j, int i)
+        {
+            var (p, c) = (calls[j], corners[i]);
+            if (Math.Sign(c.Turn) != p.Want) return double.PositiveInfinity;
+            double lead = c.Start - p.Read;
+            if (lead < -back || lead > maxLead) return double.PositiveInfinity;
+            var w = p.Subcall == 0 ? first : later;
+            double cost = lead < w[0] ? (w[0] - lead) / scale : lead > w[1] ? (lead - w[1]) / scale : 0;
+            // severity: tight calls (DR2 angle >= 65: 2, 1, square, hairpin) on open corners, fast calls (<= 25) on hairpins
+            if (p.Angle >= 65 && (minR[i] > 80 || Math.Abs(c.Turn) < 20)) cost += 1;
+            if (p.Angle <= 25 && Math.Abs(c.Turn) > 120) cost += 1;
+            return cost;
+        }
+        int n = calls.Count, k = corners.Count;
+        // dp[j, c + 1]: best cost after j calls with corner c the last one used (-1: none)
+        var dp = new double[n + 1, k + 1]; var from = new (int c, int hit)[n + 1, k + 1];
+        for (int j = 0; j <= n; j++) for (int c = 0; c <= k; c++) dp[j, c] = double.PositiveInfinity;
+        dp[0, 0] = 0;
+        for (int j = 0; j < n; j++)
+            for (int c = -1; c < k; c++)
+            {
+                double cur = dp[j, c + 1];
+                if (double.IsPositiveInfinity(cur)) continue;
+                if (cur + unplaced < dp[j + 1, c + 1]) { dp[j + 1, c + 1] = cur + unplaced; from[j + 1, c + 1] = (c, -1); }
+                bool canShare = c >= 0 && j > 0 && calls[j - 1].Call == calls[j].Call && calls[j - 1].Want == calls[j].Want;
+                for (int i = canShare ? c : c + 1; i < k; i++)
+                {
+                    if (corners[i].Start > calls[j].Read + maxLead) break;
+                    double v = cur + Cost(j, i) + (i == c ? share : 0);
+                    if (v < dp[j + 1, i + 1]) { dp[j + 1, i + 1] = v; from[j + 1, i + 1] = (c, i); }
+                }
+            }
+        int bc = Enumerable.Range(0, k + 1).MinBy(c => dp[n, c]);
+        var hit = new int[n];
+        for (int j = n; j > 0; j--) { var (pc, h) = from[j, bc]; hit[j - 1] = h; bc = pc + 1; }
+        return hit;
     }
 
     /// Builds ACR rows from DR2 tokens. toSpline maps a DR2 gate distance to metres along the CenterSpline.
+    public sealed record Placement(int Call, int Subcall, int Want, int Angle, string Token, double Read, double Start, double End, bool Localised);
+
     public static List<Row> Generate(List<Dr2Token> tokens, Func<double, double> toSpline, Curvature curve,
-                                     double startS, double finishS, double stopS, Toml m, System.Text.Json.Nodes.JsonObject report)
+                                     double startS, double finishS, double stopS, Toml m, System.Text.Json.Nodes.JsonObject report,
+                                     List<Placement>? placements = null, string? assignment = null)
     {
         var corners = FindCorners(curve, m);
         var unmapped = new SortedDictionary<string, int>();
@@ -309,7 +514,7 @@ internal static class Pacenotes
         double fbAhead = m.Num("layout", "fallback_ahead_m"), fbLen = m.Num("layout", "fallback_length_m");
 
         var placed = new List<Placed>();
-        int lastCorner = -1, localised = 0, fallback = 0, dirAgree = 0, cornerTokens = 0, mappedTokens = 0, droppedAfterFinish = 0;
+        int localised = 0, fallback = 0, dirAgree = 0, cornerTokens = 0, mappedTokens = 0, droppedAfterFinish = 0;
         string? pendingConj = null;
         double finishRead = double.NaN;
         foreach (var t in tokens)
@@ -323,29 +528,11 @@ internal static class Pacenotes
                     var dir = t.Direction is null ? null : Map("direction", t.Direction);
                     var sev = t.Severity is null ? null : Map("severity", t.Severity);
                     if (dir is null || sev is null) { Unmapped($"corner {t.Direction} {t.Severity}"); break; }
-                    var p = new Placed { Tokens = { sev.Replace("{Dir}", dir) }, Conj = pendingConj, Call = t.Call };
+                    var p = new Placed { Tokens = { sev.Replace("{Dir}", dir) }, Conj = pendingConj, Call = t.Call, Subcall = t.Subcall,
+                                         Angle = t.Angle, Read = read, Want = t.Direction == "right" ? 1 : -1 };
                     pendingConj = null;
                     foreach (var mod in t.Modifiers)
                         if (Map("modifiers", mod) is { } mt) p.Tokens.Add(mt); else Unmapped($"modifier {mod}");
-                    int want = t.Direction == "right" ? 1 : -1;
-                    int hit = -1;
-                    for (int i = lastCorner + 1; i < corners.Count; i++)
-                    {
-                        if (corners[i].Start > read + ahead) break;
-                        if (corners[i].Start >= read - back && Math.Sign(corners[i].Turn) == want) { hit = i; break; }
-                    }
-                    if (hit >= 0)
-                    {
-                        p.Start = corners[hit].Start; p.End = corners[hit].End; p.Localised = true;
-                        lastCorner = hit; localised++; dirAgree++;
-                    }
-                    else
-                    {
-                        double s0 = Math.Max(read + fbAhead, placed.Count > 0 ? placed[^1].End : 0);
-                        p.Start = s0; p.End = s0 + fbLen; fallback++;
-                        if (Math.Sign(curve.Turn(p.Start, p.End)) == want) dirAgree++;
-                    }
-                    if (p.Start >= finishS) { droppedAfterFinish++; break; }
                     placed.Add(p);
                     mappedTokens++;
                     break;
@@ -365,6 +552,42 @@ internal static class Pacenotes
                     break;
             }
         }
+
+        // corner localisation on the geometry
+        var mode = assignment ?? (m["layout"].TryGetValue("assignment", out var am) && am is string ams ? ams : "aligned");
+        var hits = mode switch
+        {
+            "greedy" => AssignGreedy(placed, corners, back, ahead),
+            "aligned" => AssignAligned(placed, corners, curve, m),
+            _ => throw new ArgumentException($"[layout] assignment must be greedy or aligned, not {mode}"),
+        };
+        foreach (var grp in Enumerable.Range(0, placed.Count).Where(i => hits[i] >= 0).GroupBy(i => hits[i]))
+        {
+            // subcalls sharing one merged geometric corner split it at its straightest points
+            var c = corners[grp.Key]; var idx = grp.ToList();
+            var cuts = new List<double> { c.Start };
+            for (int k = 1; k < idx.Count; k++)
+            {
+                double a = c.Start + (c.End - c.Start) * (k - 0.5) / idx.Count, b = c.Start + (c.End - c.Start) * (k + 0.5) / idx.Count;
+                double best = a, bk = double.MaxValue;
+                for (double s = a; s <= b; s += 2) { double kk = Math.Abs(curve.K(s, 10)); if (kk < bk) { bk = kk; best = s; } }
+                cuts.Add(best);
+            }
+            cuts.Add(c.End);
+            for (int k = 0; k < idx.Count; k++) { placed[idx[k]].Start = cuts[k]; placed[idx[k]].End = cuts[k + 1]; placed[idx[k]].Localised = true; }
+        }
+        for (int i = 0; i < placed.Count; i++)
+        {
+            var p = placed[i];
+            if (p.Localised) { localised++; dirAgree++; continue; }
+            double prevEnd = placed.Take(i).Where(q => q.Localised || q.End > 0).Select(q => q.End).DefaultIfEmpty(0).Max();
+            double s0 = Math.Max(p.Read + fbAhead, prevEnd);
+            p.Start = s0; p.End = s0 + fbLen; fallback++;
+            if (Math.Sign(curve.Turn(p.Start, p.End)) == p.Want) dirAgree++;
+        }
+        droppedAfterFinish += placed.RemoveAll(p => p.Start >= finishS);
+        report["assignment"] = mode;
+        placements?.AddRange(placed.Select(p => new Placement(p.Call, p.Subcall, p.Want, p.Angle, p.Tokens[0], p.Read, p.Start, p.End, p.Localised)));
 
         // tile: overlapping corners are trimmed; straights between corners become DistNN rows
         placed.Sort((a, b) => a.Start.CompareTo(b.Start));
@@ -425,6 +648,8 @@ internal static class Pacenotes
         report["linked_rows"] = links;
         report["dr2_finish_call_read_m"] = double.IsNaN(finishRead) ? null : Math.Round(finishRead, 1);
         report["unmapped"] = new System.Text.Json.Nodes.JsonObject(unmapped.Select(kv => KeyValuePair.Create(kv.Key, (System.Text.Json.Nodes.JsonNode?)kv.Value)));
+        report["corner_placement"] = new System.Text.Json.Nodes.JsonArray(placed.Select(p => (System.Text.Json.Nodes.JsonNode?)
+            $"call {p.Call}.{p.Subcall} {(p.Want > 0 ? "R" : "L")} angle {p.Angle}: read {p.Read - startS:0} -> row {p.Start - startS:0} (lead {p.Start - p.Read:0} m){(p.Localised ? "" : " fallback")}").ToArray());
         report["rows_preview"] = new System.Text.Json.Nodes.JsonArray(rows.Select(r => (System.Text.Json.Nodes.JsonNode?)$"{r.Key} {r}").ToArray());
         return rows;
     }

@@ -126,6 +126,7 @@ internal static class StageBuild
             report["options"]!["visuals_retarget"] = vo.Retarget;
             report["options"]!["visuals_owner"] = vo.Owner;
             report["options"]!["visuals_vegetation"] = vo.Vegetation;
+            report["options"]!["visuals_canopies"] = vo.Canopies;
         }
         var road = Road(ir, pl);
 
@@ -687,14 +688,18 @@ internal static class StageBuild
             }
             var curve = Curvature.FromPoints(cell.CentreUe.Select(p => (p.X / 100, p.Y / 100)).ToList(), cell.GateS);
             var pr = new JsonObject();
-            table.Rows = Pacenotes.Generate(Pacenotes.LoadTokens(Path.Combine(ir.Dir, "stage.json")), ToSpline, curve,
-                                            cell.StartS, cell.FinishS, cell.StopS, pacenoteMap, pr);
+            var tokens = Pacenotes.LoadTokens(Path.Combine(ir.Dir, "stage.json"));
+            var placements = new List<Pacenotes.Placement>();
+            table.Rows = Pacenotes.Generate(tokens, ToSpline, curve, cell.StartS, cell.FinishS, cell.StopS, pacenoteMap, pr, placements,
+                                            o.Named.GetValueOrDefault("pacenote-assignment"));
             pace.SetExportData(0, Pacenotes.Write(table, pace));
             pace.SaveTo(Path.Combine(outRoot, HostPaths.Pacenote + Path.GetExtension(ppath)));
             pr["host_rows_replaced"] = hostRows;
             if (o.Named.GetValueOrDefault("pacenote-report") is { } reportPath)
             {
-                var (mis, hints, corners) = Pacenotes.Report(table.Rows, curve, cell.StartS, pacenoteMap, ir.Name, reportPath);
+                var greedy = new List<Pacenotes.Placement>();
+                var greedyRows = Pacenotes.Generate(tokens, ToSpline, curve, cell.StartS, cell.FinishS, cell.StopS, pacenoteMap, new JsonObject(), greedy, "greedy");
+                var (mis, hints, corners) = Pacenotes.Report(table.Rows, curve, cell.StartS, pacenoteMap, ir.Name, reportPath, placements, greedyRows, greedy);
                 pr["report"] = $"{reportPath}: {corners} corner calls, {mis} mismatches, {hints} severity hints";
                 Console.WriteLine($"pacenote report: {pr["report"]}");
             }
@@ -766,7 +771,7 @@ internal static class StageBuild
             var vo = report["options"]!;
             var opt = new Visuals.Options(vo["visuals_host"]?.GetValue<string>() ?? "start",
                 vo["visuals_retarget"]?.GetValue<bool>() ?? false, vo["visuals_owner"]?.GetValue<string>(),
-                vo["visuals_vegetation"]?.GetValue<string>() ?? "none");
+                vo["visuals_vegetation"]?.GetValue<string>() ?? "none", vo["visuals_canopies"]?.GetValue<string>());
             RoadProbe? probe = vo["objects"]?.GetValue<string>() is { } objCfg
                 ? new RoadProbe(Road(ir, pl), new SurfaceGrid(Path.Combine(ir.Dir, "collision.glb"), pl), Toml.Load(objCfg)) : null;
             failures += Visuals.Check(new LegacyPackage(HostPaths.Resolve(root, HostPaths.Cell)), ir, pl, Toml.Load(visualsCfg), opt, w,

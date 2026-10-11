@@ -372,7 +372,7 @@ What changed from v1.3:
   sampled. If something orange or violet stood in the road in v1.3 and was solid, this was probably it.
 - **Largest drawn object:** 31 m (the building); no object is drawn larger than its DR2 bounds.
 - **Triangles:** 1,289,685 (objects 278,749); the visuals export is 97.2 MB.
-- **Pacenote report:** `work\acr\pacenotes-nz01r5.md` has every call with its distance from the start line and the
+- **Pacenote report:** `work\acr\pacenotes-nz01r5-v1.4.md` has every call with its distance from the start line and the
   DR2 corner measured there.
   - 61 corner calls, of which 2 have the wrong direction:
     - Left4 at 1,238 m: a right corner of 60° is there.
@@ -396,3 +396,62 @@ Variant: `work\acr\dist-v1.4-crowns` (`-Vegetation crowns -Tag nz01r5-v1.4-crown
   1.5 m from the road edges. 457 crowns are dropped as too low, too small, or too close to the road.
 - Offline: 11 / 0 and 43 / 0. Sizes: ucas 329,648,179, utoc 61,407, pak 347.
 - Try it only if the default build looks good, and report whether the crowns help or clutter.
+
+**Result (in game, default build):**
+- The road is clearly visible, with no green.
+- Collision on the yellow and violet fences is fine.
+- Respawn works; the timer and frame rate are unchanged.
+- Two faults:
+  - The pacenotes drift: calls come progressively too late along the stage.
+  - The orange "trunks" show as huge flat triangular panels on both sides of the road.
+
+## v1.5 test: calls on their own corners, canopies drawn at car height only
+
+`work\acr\dist-v1.5\zz_acrdirt_nz01r5_P.*`: same container name, so remove v1.4's three files first. Build:
+`.\mods\acrdirt-stage\build.ps1 -Version v1.5 -Verify`.
+- Offline: CUE4Parse 11 PASS / 0 FAIL, round trip 44 PASS / 0 FAIL.
+- Sizes: ucas 329,207,724, utoc 61,335, pak 347.
+- Triangles: 1,296,219 (objects 285,283).
+
+What changed from v1.4 (details in docs/decisions.md, D7 v1.5):
+- **Pacenotes:** the drift was a one-corner offset, not a distance-scale error. The scale checks out: ACR's
+  SplineDistanceM is CenterSpline metres (the host fits at shift 0, scale 1.000), and DR2's distances agree with
+  ours within 0.33 %.
+  - DR2's first call ("Right2 into Right1") is one merged corner. v1.4 gave its Right1 the next right turn, so every
+    later call was one corner late up to about 2 km: 112 m late on average in the first 500 m, rising to 181 m by
+    1,500–2,000 m. After 2 km v1.4 was right.
+  - v1.5 aligns all calls to the corners in order. DR2's read point now sits 64–93 m before each called corner on
+    average (DR2 itself reads 50–150 m ahead). After 2 km the rows are identical to v1.4.
+  - Report: `work\acr\pacenotes-nz01r5-v1.5.md`, with each call's v1.4 and v1.5 distance and the drift table.
+    0 mismatches and 2 severity hints, down from 2 and 15.
+- **Orange panels:** these were DR2's tree canopy colliders, not trunks. They are upside-down cones about 5.5 m
+  wide and 6.4 m tall, sitting on the trunk.
+  - The collider itself is that big in DR2 too; it is unchanged. At car height it is only the narrow tip near the
+    trunk, which is why collision felt fine.
+  - v1.5 draws only the part below 2.5 m above the tree base: a small orange cone tip on the trunk, about 0.9 m
+    wide at the top. That part is what the car can hit.
+  - 11 canopies whose tip is above 2.5 m are not drawn.
+- **New offline check:** every drawn shape (2,722) stays inside its collider's own bounds.
+
+Check (distances are metres from the start line; with Normal anticipation a call should come about 5–6 s before its
+corner):
+1. **Start to 400 m:** "Right2 into Right1" for the long right from 156 m, then "Left5" at 230 m and "Right2" at 328 m.
+   In v1.4 these were all one corner late.
+2. **380 m Left2** (75°, tight), **434 m Right3**, then **576 m Left5** and **614 m Right2 and Left1** (664 m).
+3. **1,098 m Left4** (a gentle left): in v1.4 this call landed on a right turn at 1,238 m.
+4. **1,412 m RightHP** (160°), then **1,656 m Left3 into LeftHP** (183° over 1,656–1,772 m).
+5. **1,864 m Left4, 1,950 m Right4, 2,056 m Left4**: the end of the former drift. v1.4's third Left4 sat on a right
+   turn at 2,146 m.
+6. **2,140 m Right2** and everything after it is unchanged from v1.4, as a control. For example: **3,370 m LeftHP**,
+   **3,918 m RightHP**, **4,262 m LeftHP**.
+7. Still flagged, worth a listen:
+   - **2,582 m Left6 then Left3** (2,620 m) on one long 146° left that tightens;
+   - **3,118 m Right4 into Right3** (3,158 m) on a 74° right.
+8. The one call not placed on a corner: **Right6 at 515 m** (no right turn found there; placed 80 m after DR2's read
+   point).
+9. **Trees:** no large orange panels; trunks with a small orange cone tip at about 1.5–2.5 m. Tree collision should
+   feel the same as in v1.4.
+10. As before: road visible, fences solid, respawn, timer, frame rate.
+
+Report per checkpoint: whether the call came too early, on time, or too late, and whether the severity sounded right.
+If it's still late everywhere, try Pacenote Anticipation "Early" once and say whether that fixes it.

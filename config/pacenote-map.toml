@@ -51,10 +51,22 @@ long_straight_m = 500
 into = "Into"
 and = "And"
 into_max_m = 15
-# Corner localisation: a DR2 call is read before the corner; the corner it names is the first unassigned geometric
-# corner of the same direction starting within [read - search_back_m, read + search_ahead_m].
+# Corner localisation: a DR2 call is read before its corner (50-150 m, docs/dr2-formats.md).
+# aligned (v1.5): order-preserving alignment of all corner calls to the geometric corners of the same direction,
+#   cost = lead outside [lead_first_m] (first subcall of a call) or [lead_later_m] (later subcalls), per
+#   lead_cost_scale_m, + 1 for a tight call on an open corner or a fast call on a hairpin; a call left unplaced
+#   costs unplaced_cost; consecutive same-direction subcalls of one call may share a merged corner (+ share_cost)
+# greedy (v1.4): the first unassigned corner of the same direction starting within
+#   [read - search_back_m, read + search_ahead_m]; one early mismatch shifts all later calls by a corner
+assignment = "aligned"
 search_back_m = 30
 search_ahead_m = 300
+lead_first_m = [40, 160]
+lead_later_m = [40, 400]
+lead_max_m = 450
+lead_cost_scale_m = 50
+unplaced_cost = 3
+share_cost = 0.5
 # If none matches, the row is placed fallback_ahead_m after the read point with fallback_length_m.
 fallback_ahead_m = 80
 fallback_length_m = 30

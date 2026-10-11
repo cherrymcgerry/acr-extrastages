@@ -32,7 +32,7 @@ internal static class VisualObjects
     sealed record Mesh(Vector3[] Pos, uint[] Idx, Vector3 Min, Vector3 Max);
 
     public static (Dictionary<string, ProcMesh.Section> sections, JsonObject report) Build(
-        StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ObjectColliders.Result objs, Func<V3, bool> inPhysicsBounds, string vegetation)
+        StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ObjectColliders.Result objs, Func<V3, bool> inPhysicsBounds, string vegetation, string? canopies = null)
     {
         int maxMeshTris = (int)cfg.Num("objects", "max_mesh_triangles");
         int sides = (int)cfg.Num("objects", "prism_sides");
@@ -68,6 +68,14 @@ internal static class VisualObjects
         var fallbacks = new SortedDictionary<string, (int n, double depth)>();
         bool Fallback(string t, double d) { var f = fallbacks.GetValueOrDefault(t); fallbacks[t] = (f.n + 1, Math.Max(f.depth, d)); return false; }
         var extents = new List<(string template, string id, double ext, double bounds)>();
+        var canopyMode = canopies ?? (cfg["objects"].TryGetValue("canopies", out var cm) && cm is string cms ? cms : "clip");
+        if (canopyMode is not ("clip" or "full" or "none")) throw new ArgumentException($"[objects] canopies must be clip, full or none, not {canopyMode}");
+        double canopyClip = cfg.Num("objects", "canopy_clip_height_m") * 100, minFill = cfg.Num("objects", "shape_min_fill");
+        int canopiesClipped = 0, canopiesHidden = 0, shapesCompared = 0;
+        double worstOutside = 0, worstFill = 1;
+        var shapeMismatches = new List<string>();
+        var canopyColliderTops = new List<double>();
+        static string Dims(Vector3 a, Vector3 b) => $"{(b.X - a.X) / 100:0.0} x {(b.Y - a.Y) / 100:0.0} x {(b.Z - a.Z) / 100:0.0} m";
 
         V3 Ue(Vector3 dr2) => pl.ToUe([dr2.X, dr2.Y, dr2.Z]);
 
@@ -84,10 +92,36 @@ internal static class VisualObjects
                 .SelectMany(b => b!["shapes"]!.AsArray()).Any(s => treeClasses.Contains(s!["shape_class"]?.GetValue<string>() ?? "")) == true;
 
             var before = sec.ToDictionary(kv => kv.Key, kv => kv.Value.Pos.Count);
+            double baseZ = Ue(origin).Z;
+            void DrawShape(ObjectColliders.Shape s)
+            {
+                var target = sec[ClassOf(s.Material)];
+                int from = target.Pos.Count;
+                bool canopy = IsCanopy(s);
+                if (canopy && canopyMode == "none") { canopiesHidden++; return; }
+                if (canopy && canopyMode == "clip")
+                {
+                    if (!AddClippedCone(target, s, baseZ + canopyClip)) { canopiesHidden++; return; }
+                    canopiesClipped++;
+                }
+                else AddShape(target, s, sides, pl);
+                // drawn vs collider: inside the collider's analytic bounds; unclipped at least min_fill of them per axis
+                var (cmn, cmx) = ColliderBounds(s);
+                var lo = new Vector3(float.MaxValue); var hi = new Vector3(float.MinValue);
+                for (int i = from; i < target.Pos.Count; i++) { lo = Vector3.Min(lo, target.Pos[i]); hi = Vector3.Max(hi, target.Pos[i]); }
+                double outBy = Math.Max(Math.Max(Math.Max(cmn.X - lo.X, hi.X - cmx.X), Math.Max(cmn.Y - lo.Y, hi.Y - cmx.Y)), Math.Max(cmn.Z - lo.Z, hi.Z - cmx.Z));
+                double fill = canopy && canopyMode == "clip" ? 1 : Math.Min(Math.Min((hi.X - lo.X) / Math.Max(1, cmx.X - cmn.X), (hi.Y - lo.Y) / Math.Max(1, cmx.Y - cmn.Y)),
+                                                                       (hi.Z - lo.Z) / Math.Max(1, cmx.Z - cmn.Z));
+                shapesCompared++;
+                if (outBy > 2 || fill < minFill)
+                    shapeMismatches.Add($"{s.Template} {s.Instance} {s.Kind}: drawn {Dims(lo, hi)} vs collider {Dims(cmn, cmx)} (outside by {outBy:0} cm, fill {fill:0.00})");
+                worstOutside = Math.Max(worstOutside, outBy); worstFill = Math.Min(worstFill, fill);
+                if (canopy) canopyColliderTops.Add(cmx.Z - baseZ);
+            }
             if (tree && shapes.Count > 0)
             {
                 treeInstances++;
-                foreach (var s in shapes) AddShape(sec[ClassOf(s.Material)], s, sides, pl);
+                foreach (var s in shapes) DrawShape(s);
                 counts["trunks"]++;
                 string crown = "no crown";
                 if (crowns && mesh is not null)
@@ -117,7 +151,7 @@ internal static class VisualObjects
             else if (shapes.Count > 0)
             {
                 proxyInstances++;
-                foreach (var s in shapes) { AddShape(sec[ClassOf(s.Material)], s, sides, pl); counts[ClassOf(s.Material)]++; }
+                foreach (var s in shapes) { DrawShape(s); counts[ClassOf(s.Material)]++; }
                 perTemplate.TryAdd(tname, mesh is null ? "kept shapes (no render mesh)"
                     : mesh.Idx.Length / 3 > maxMeshTris ? $"kept shapes (render mesh {mesh.Idx.Length / 3} triangles > {maxMeshTris})"
                     : "kept shapes (render mesh reaches into the road corridor)");
@@ -172,6 +206,14 @@ internal static class VisualObjects
             ["render_mesh_road_fallback"] = new JsonObject(fallbacks.Select(kv => KeyValuePair.Create(kv.Key,
                 (JsonNode?)$"{kv.Value.n} (render mesh {kv.Value.depth / 100:0.00} m into the corridor -> shapes)"))),
             ["without_render_mesh_or_shapes"] = noMesh,
+            ["canopies"] = $"{canopyMode}: {canopiesClipped} drawn up to {canopyClip / 100:0.#} m above the tree base, {canopiesHidden} not drawn"
+                           + (canopyColliderTops.Count > 0 ? $"; their colliders (kept, DR2 sizes) reach {canopyColliderTops.Average() / 100:0.0} m above the base on average, {canopyColliderTops.Max() / 100:0.0} m max" : ""),
+            ["shapes_vs_colliders"] = new JsonObject
+            {
+                ["compared"] = shapesCompared, ["mismatches"] = shapeMismatches.Count,
+                ["max_outside_collider_cm"] = Math.Round(worstOutside, 1), ["min_fill"] = Math.Round(worstFill, 3),
+                ["first"] = new JsonArray(shapeMismatches.Take(10).Select(x => (JsonNode)x).ToArray()),
+            },
             ["colliders_overhead_in_corridor"] = overhead,
             ["largest_extent_m"] = largest.Count > 0 ? Math.Round(largest[0].ext, 2) : 0,
             ["largest"] = new JsonArray(largest.Select(x => (JsonNode)$"{x.template} {x.id}: {x.ext:0.0} m (DR2 bounds {x.bounds:0.0} m)").ToArray()),
@@ -220,7 +262,7 @@ internal static class VisualObjects
         else if (sh.Capsule is { } cp)
         {
             var (ax, ay, az) = ObjectColliders.RotationAxes(cp.Rot[0], cp.Rot[1], cp.Rot[2]);
-            double half = cp.Length / 2 + cp.Radius;
+            double half = cp.Length / 2;
             var pts = new List<V3>();
             foreach (var end in new[] { -half, half })
                 for (int i = 0; i < sides; i++)
@@ -231,7 +273,13 @@ internal static class VisualObjects
             var faces = new List<(int, int, int, int)>();
             for (int i = 0; i < sides; i++) faces.Add((i, (i + 1) % sides, sides + (i + 1) % sides, sides + i));
             AddHull(s, pts, faces, cp.Center);
-            for (int i = 1; i + 1 < sides; i++) { Tri(s, pts[0], pts[i], pts[i + 1], cp.Center); Tri(s, pts[sides], pts[sides + i], pts[sides + i + 1], cp.Center); }
+            // pointed ends inside the hemispheres, so a tilted capsule is not drawn wider than it is
+            V3 tipLo = cp.Center + ay * -(half + cp.Radius), tipHi = cp.Center + ay * (half + cp.Radius);
+            for (int i = 0; i < sides; i++)
+            {
+                int n = (i + 1) % sides;
+                Tri(s, pts[i], pts[n], tipLo, cp.Center); Tri(s, pts[sides + i], pts[sides + n], tipHi, cp.Center);
+            }
         }
         else if (sh.MeshPhysics is { } mp && sh.MeshTris is { } mt)
         {
@@ -239,6 +287,61 @@ internal static class VisualObjects
             var ctr = new V3(ue.Average(v => v.X), ue.Average(v => v.Y), ue.Average(v => v.Z));
             for (int t = 0; t + 2 < mt.Count; t += 6) Tri(s, ue[(int)mt[t]], ue[(int)mt[t + 1]], ue[(int)mt[t + 2]], ctr);
         }
+    }
+
+    static V3 PhysToUe(Vector3 p) => new(p.X * 100, p.Z * 100, p.Y * 100);
+
+    /// DR2 cone colliders on trees with the apex below the base are canopies (pohutukawa: ~2.8 m radius, 6.4 m tall,
+    /// apex ~1.5 m above the ground); upright cones are trunk flares.
+    static bool IsCanopy(ObjectColliders.Shape sh)
+    {
+        if (sh.MeshPhysics is not { Count: > 1 } mp) return false;
+        float ringY = mp.Take(mp.Count - 1).Average(p => p.Y);
+        return mp[^1].Y < ringY;
+    }
+
+    /// Part of an inverted cone below `topZ` (UE cm): apex up to the cut, capped. False if the apex is above the cut.
+    static bool AddClippedCone(ProcMesh.Section s, ObjectColliders.Shape sh, double topZ)
+    {
+        var ue = sh.MeshPhysics!.Select(PhysToUe).ToList();
+        var apex = ue[^1];
+        if (apex.Z >= topZ) return false;
+        var ring = ue.Take(ue.Count - 1).Select(r => r.Z <= topZ ? r : apex + (r - apex) * ((topZ - apex.Z) / (r.Z - apex.Z))).ToList();
+        var ctr = apex * 0.25 + ring.Aggregate((a, b) => a + b) * (0.75 / ring.Count);
+        for (int i = 0; i < ring.Count; i++)
+        {
+            var n = ring[(i + 1) % ring.Count];
+            Tri(s, apex, ring[i], n, ctr);
+            if (i > 0 && i + 1 < ring.Count) Tri(s, ring[0], ring[i], n, ctr);
+        }
+        return true;
+    }
+
+    /// UE-space bounds of the collider itself, from its definition rather than the drawn hull: box corners, capsule
+    /// segment +- radius, cone vertices.
+    static (Vector3 mn, Vector3 mx) ColliderBounds(ObjectColliders.Shape sh)
+    {
+        V3 mn, mx;
+        if (sh.Box is { } b)
+        {
+            var (ax, ay, az) = ObjectColliders.RotationAxes(b.Rot[0], b.Rot[1], b.Rot[2]);
+            var e = Abs(ax) * (b.X / 2) + Abs(ay) * (b.Y / 2) + Abs(az) * (b.Z / 2);
+            (mn, mx) = (b.Center - e, b.Center + e);
+        }
+        else if (sh.Capsule is { } cp)
+        {
+            var (_, ay, _) = ObjectColliders.RotationAxes(cp.Rot[0], cp.Rot[1], cp.Rot[2]);
+            var e = Abs(ay) * (cp.Length / 2) + new V3(cp.Radius, cp.Radius, cp.Radius);
+            (mn, mx) = (cp.Center - e, cp.Center + e);
+        }
+        else
+        {
+            var ue = sh.MeshPhysics!.Select(PhysToUe).ToList();
+            mn = new V3(ue.Min(v => v.X), ue.Min(v => v.Y), ue.Min(v => v.Z));
+            mx = new V3(ue.Max(v => v.X), ue.Max(v => v.Y), ue.Max(v => v.Z));
+        }
+        return (new Vector3((float)mn.X, (float)mn.Y, (float)mn.Z), new Vector3((float)mx.X, (float)mx.Y, (float)mx.Z));
+        static V3 Abs(V3 v) => new(Math.Abs(v.X), Math.Abs(v.Y), Math.Abs(v.Z));
     }
 
     static void AddHull(ProcMesh.Section s, List<V3> p, List<(int a, int b, int c, int d)> quads, V3 centre)

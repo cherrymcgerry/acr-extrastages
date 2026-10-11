@@ -319,3 +319,50 @@ First stage: `new_zealand_rally_01_route_5` → `zz_acrdirt_nz01r5_P`. Built by 
     start-line distance, the call, and the strongest geometric corner within ±20 m. A corner call is flagged when
     the direction is wrong, or when a tight call has no corner there. A severity hint compares the corner's minimum
     radius with the host's median for that severity.
+  - In game [V]: the road is clearly visible with no green, the fences are solid, and respawn, the timer and frame rate
+    are unchanged. Two faults remain: the calls drift late, and the trunks show as large orange panels (v1.5).
+- **v1.5: calls on their own corners; canopies drawn only at car height [V offline]:**
+  - ACR's pacenote convention [V offline]:
+    - SplineDistanceM is metres along the CenterSpline from its first point. The host's corner rows fit their own
+      CenterSpline best at shift 0 m and scale 1.000 (`acr-ref pacenote-survey --shift`). IdealSpline fits worse, and
+      a start-line origin fits far worse.
+    - Host rows mark the corner itself and tile the road: each row's LengthM runs to the next row. SavedLocation is
+      the same on every host row, so it is unused.
+    - DA_PacenoteConfig calls a row LookAheadTime before the car reaches it: Late 5.0, Normal 5.75, Early 6.5 and
+      Very_Early 7.2 s, capped at 425–650 m. The speed comes from the spline's curvature, capped at 160 km/h.
+      The "Pacenote Anticipation" option chooses among these four.
+    - No duration field sets when the next call plays; that is inferred from the config and tables, not from code.
+  - DR2 convention [V offline]:
+    - distanceAlongTrack is metres from the start line to the point where the note is read, 50–150 m before its
+      corner. A call's subcalls play in order; angle encodes severity. DR2 has no corner-length field.
+    - DR2's gate distances and our polyline agree within 0.33 % (4,851.8 vs 4,835.7 m), so there is no scale drift.
+  - Root cause [V offline]: v1.4 assigned corners greedily, giving each subcall the first unassigned
+    same-direction corner from −30 to +300 m after the read point.
+    - Call 1 (Right2 into Right1) is a single merged corner, so its Right1 took the next right turn, at 328 m.
+    - Every call after it then landed one corner late. From 160 to 1,800 m, rows sat 88–200 m after their own
+      corners (DR2 read point + 190–343 m). The mean per 500 m grew from 112 to 181 m along that stretch: the drift
+      heard in game.
+    - The cascade reset at call 21 (2,049 m), when a gap in the calls let it catch up.
+    - The 2 direction mismatches and most severity hints in v1.4 were this offset, not wrong calls.
+  - Fix: an ordered alignment of all subcalls to all corners by dynamic programming (`[layout] assignment = "aligned"`).
+    - The cost counts: lead outside 40–160 m for a call's first subcall (40–400 m for later subcalls); severity
+      against radius; and unplaced or shared corners.
+    - Subcalls that share one corner split it at its straightest point.
+    - Result: first-subcall leads are 39–119 m, mean 64–93 m per 500 m; 60 of 61 corner calls are on geometry; and
+      there are 0 mismatches and 2 severity hints, both long merged corners.
+    - v1.4 is rebuilt with `--pacenote-assignment greedy`.
+  - Trunks [V offline]: the large orange shapes are DR2 tree canopy colliders, not trunks.
+    - They are cones of class sSolidTreeLeafy with PM_WallWoodTreeTrunks, stored inverted (apex down).
+    - pohutukawa_01_a: radius 2.76 m, height 6.4 m, apex about 1.5 m above the ground. Instances reach 8.0 m on
+      average and 15.6 m at most.
+    - They were drawn exactly as the colliders, so the colliders are equally large. DR2 has them this size. At car
+      height the car meets only the narrow apex near the trunk, which matches "collision feels fine".
+  - Canopy fix: the colliders are unchanged, and the visual shows only the part of an inverted cone below 2.5 m above
+    the tree base (`[objects] canopies = "clip"`; `full` or `none` via `--visuals-canopies`).
+    - 792 canopies are drawn clipped; 11 sit entirely above 2.5 m and are not drawn.
+    - Capsules now have pointed ends inside their hemispheres, so a tilted capsule is no longer drawn wider than its
+      collider.
+  - New check, per drawn shape: the collider's own bounds, computed from its definition (box corners, capsule
+    segment ± radius, cone vertices).
+    - The drawn shape must stay inside them (+2 cm), and unclipped shapes must fill at least 0.8 of them per axis.
+    - 2,722 shapes pass: 0 cm outside at most, minimum fill 0.84.
