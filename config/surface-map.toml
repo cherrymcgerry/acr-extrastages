@@ -1,0 +1,104 @@
+# DR2 physics-ground surface code -> ACR physical material.
+#
+# Keys are the 4-char codes stored per triangle in route_N/track.jpk (see docs/dr2-formats.md); their definitions
+# (base_name inheritance, MECHANICS/AUDIO/PARTICLE names, friction) live in game_1.dat surface_materials.xml.
+# Values are ACR assets under /Game/Data/Gameplay/PhysicalMaterials/.
+# `dr2-extract stage-ir` fails on any code used by a stage that is not listed here.
+#
+# This covers every code found within 250 m of all 156 DR2 rally routes (`dr2-extract catalog`). Grouping is by
+# the code's DR2 MECHANICS class; comments give that class and the DR2 mechanics depth/bumps where it drove the choice.
+# These are first-pass choices for tuning in ACR, not measured equivalences.
+
+[surfaces]
+# --- gravel ---------------------------------------------------------------------------------------------------
+# GRAV_LIGHTDRY: thin loose layer on a hard base (depth 0.005)
+"GLD+" = "PM_SurfaceGravelHard"
+"GD0+" = "PM_SurfaceGravelHard"
+"GD2+" = "PM_SurfaceGravelHard"
+"GD3+" = "PM_SurfaceGravelHard"
+"GD5+" = "PM_SurfaceGravelHard"
+"GD8+" = "PM_SurfaceGravelHard"
+"GD9+" = "PM_SurfaceGravelHard"
+# GRAV_MEDDRY / GRAV_MEDWET: deeper loose gravel (depth 0.008)
+"GMD+" = "PM_SurfaceGravelFine"
+"GM0+" = "PM_SurfaceGravelFine"
+"GM2+" = "PM_SurfaceGravelFine"
+"GM3+" = "PM_SurfaceGravelFine"
+"GM5+" = "PM_SurfaceGravelFine"
+"GM9+" = "PM_SurfaceGravelFine"
+"GWS+" = "PM_SurfaceGravelFine"
+# GRAV_HEAVYDRY: deep loose gravel (depth 0.008, bumps 0.0175)
+"GHD+" = "PM_SurfaceGravelFine"
+"GH0+" = "PM_SurfaceGravelFine"
+"GH1+" = "PM_SurfaceGravelFine"
+"GH3+" = "PM_SurfaceGravelFine"
+"GH4+" = "PM_SurfaceGravelFine"
+"GH5+" = "PM_SurfaceGravelFine"
+# GRAV_LEAVES: loose gravel with leaf litter (depth 0.008)
+"GLE+" = "PM_SurfaceGravelFine"
+"GLF+" = "PM_SurfaceGravelFine"
+"GLL+" = "PM_SurfaceGravelFine"
+"GLS+" = "PM_SurfaceGravelFine"
+# GRAV_OUTFIELD / GRAV_BANK: loose gravel run-off and banks
+"GV0+" = "PM_SurfaceGravelFine"
+"GBK+" = "PM_SurfaceGravelFine"
+"GB0+" = "PM_SurfaceGravelFine"
+"GB1+" = "PM_SurfaceGravelFine"
+
+# --- dirt / mud (no ACR equivalent; packed earth -> hard gravel, mud -> sand for drag) -------------------------
+# DIRT, DIRT_LEAVES: earth road (depth 0.01)
+"DRT+" = "PM_SurfaceGravelHard"
+"DR1+" = "PM_SurfaceGravelHard"
+"DR4+" = "PM_SurfaceGravelHard"
+"DLE+" = "PM_SurfaceGravelHard"
+"DL0+" = "PM_SurfaceGravelHard"
+# DIRT_BANK: earth verges and banks
+"DBK+" = "PM_SurfaceGravelHard"
+"DB0+" = "PM_SurfaceGravelHard"
+"DB1+" = "PM_SurfaceGravelHard"
+"DB3+" = "PM_SurfaceGravelHard"
+# MUD (depth 0.012), MUDBANK
+"MD0+" = "PM_SurfaceSand"
+"MB0+" = "PM_SurfaceSand"
+
+# --- grass -----------------------------------------------------------------------------------------------------
+# GRASS, GRASS_LEAVES, GRASS_OUTFIELD, GRASS_WET
+"GRS+" = "PM_SurfaceGrass"
+"GR0+" = "PM_SurfaceGrass"
+"GR2+" = "PM_SurfaceGrass"
+"GR3+" = "PM_SurfaceGrass"
+"GSL+" = "PM_SurfaceGrass"
+"GGL+" = "PM_SurfaceGrass"
+"GSO+" = "PM_SurfaceGrass"
+"GS0+" = "PM_SurfaceGrass"
+"GWT+" = "PM_SurfaceGrass"
+
+# --- rock ------------------------------------------------------------------------------------------------------
+# ROCK, ROCK_BANK (drivable rock and rocky banks; steep faces are not separated out as walls)
+"ROK+" = "PM_SurfaceRock"
+"RBK+" = "PM_SurfaceRock"
+
+# --- snow / ice ------------------------------------------------------------------------------------------------
+"SNO+" = "PM_SurfaceSnow"       # SNOW
+"SWC+" = "PM_SurfaceSnow"       # SNOW_COMPACTED
+"SSS+" = "PM_SurfaceSnow"       # SNOW_SLUSHY
+"SWS+" = "PM_SurfaceSnow"       # SNOW_SLUSHY
+"SWD+" = "PM_SurfaceDeepSnow"   # SNOW_DEEP (depth 0.03)
+"SNB+" = "PM_SurfaceDeepSnow"   # SNOW_BANK: soft banks that catch the car
+"ICS+" = "PM_SurfaceSnow"       # ICE_SMOOTH: no ACR ice material; snow is the closest low-grip surface
+
+# --- sealed ----------------------------------------------------------------------------------------------------
+"TSD+" = "PM_SurfaceTarmacSmooth"   # TARMAC_SMOOTHDRY
+"TRD+" = "PM_SurfaceTarmacSmooth"   # TARMAC_ROUGHDRY: no rough-tarmac material in ACR
+"TR2+" = "PM_SurfaceTarmacSmooth"   # TARMAC_ROUGHDRY
+"CON+" = "PM_SurfaceConcrete"       # CONCRETE
+"CNR+" = "PM_SurfaceKerb"           # CONCRETE_RIDGED: ridged concrete edging/gutters (bumps 0.02)
+"CPR+" = "PM_SurfaceKerb"           # CONCRETE_POLISHED_RIDGED
+"CBW+" = "PM_SurfaceCobblestones"   # COBBLES_WET
+"WDB+" = "PM_SurfaceConcrete"       # WOOD_BOARD: bridge decking; no drivable wood material in ACR
+"WDS+" = "PM_SurfaceConcrete"       # WOODEN_SLAT
+"MRD+" = "PM_SurfaceMetal"          # METAL_RIDGED
+"CATG" = "PM_SurfaceMetal"          # cattle grid (base PHYS, mechanics CATTLEGRID)
+
+# --- other -----------------------------------------------------------------------------------------------------
+"DEFA" = "PM_Fallback"              # DEFAULT
