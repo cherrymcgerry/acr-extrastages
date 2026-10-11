@@ -115,3 +115,27 @@ minimum at 380 m. The exact numbers are in `work\acr\stage-nz01r5.report.json` a
   - Race sectors detect the car by spline distance (their trigger boxes are tiny).
   - Respawn uses the rebuilt splines.
   - An empty pacenote table is accepted.
+
+## Optional: run the recorder
+
+[`tools/stage-validate`](validation.md) logs the shared-memory telemetry while you drive (read-only). It then
+checks the run against the IR: progress, lateral offset vs the road edges, fall-throughs, off-route stretches,
+start/finish timing and speed. It also draws a top-down SVG of the route vs your path. A run CSV plus the
+`check` output is the most useful thing to send back with the report in section 3.
+
+```powershell
+cd C:\Users\robbe\Projects\acr-dirt
+cargo build --release --manifest-path tools\stage-validate\Cargo.toml
+$sv = 'tools\stage-validate\target\release\stage-validate.exe'
+
+# before or after launching ACR; stops on Ctrl+C or ~5 s after you leave the stage
+& $sv record --out work\validate\nz01r5-run1.csv
+
+# afterwards
+& $sv check --run work\validate\nz01r5-run1.csv `
+    --stage work\ir\new_zealand_rally_01_route_5\stage.json `
+    --transform work\acr\stage-nz01r5.report.json
+```
+
+The check prints PASS/WARN/FAIL per item and writes `work\validate\nz01r5-run1.svg`. One recording per attempt
+is easiest. If you use ACR Rewind, the rewinds show up as "teleports", not as falls.
