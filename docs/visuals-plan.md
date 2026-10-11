@@ -2,7 +2,7 @@
 
 Status: v1.2 renders DR2 geometry in flat debug colours via the start-trigger ProceduralMeshComponent (PMC), verified
 in game; v1.3 adds the objects (docs/decisions.md D6, D7). This plan replaces the flat colours with textured materials
-without the UE editor. Nothing beyond the material proof below is implemented.
+without the UE editor. Step 1 is confirmed in game; step 2 is built in v1.7 (in-game test pending).
 
 ## What we have to work with (verified offline)
 
@@ -24,19 +24,32 @@ without the UE editor. Nothing beyond the material proof below is implemented.
 
 ## Steps
 
-1. **Material proof (built, untested):** `work\acr\tex-proof\dist` is v1.3 with `MI_Terrain9MatBlend1001` on the
-   terrain section and `MI_WalesS4HafrenSouthGravelRoad1` on the road section. Config:
+1. **Material proof [V in game, during v1.3]:** `work\acr\tex-proof\dist` is v1.3 with `MI_Terrain9MatBlend1001` on
+   the terrain section and `MI_WalesS4HafrenSouthGravelRoad1` on the road section. Config:
    `work\acr\tex-proof\visuals-texproof.toml`, built with `build.ps1 -Version v1.3 -VisualsConfig ...`.
-   - It answers: does a lit, textured Hafren material render on the PMC? And how are its masks and layers sampled:
-     by UV0, which we set to world/4 m and which the masks clamp over a 350 m tile, or by world position?
-   - A screenshot of the ground decides what follows.
-   - Effort: done (config only). Risk: low; the worst case is a black or flat ground, and it is fully reversible.
-2. **Road textured (likely cheap):** if the gravel material renders, write proper road UVs (U across the road
-   0..1, V = distance / tile length) and use the Hafren gravel MI as is. These are Welsh gravel textures, not NZ ones,
-   but they read as gravel.
-   - Effort: about half a day. Risk: low.
+   - Result: both materials render on the PMC, lit and textured, and the mapping looked right. The v1.3 green
+     clutter made the detail hard to judge.
+2. **Road textured (v1.7, built; in-game test pending):** the tex-proof materials on the v1.6 visuals plus
+   road-following UVs (`[textured]` in config/visuals.toml, `RoadUv`).
+   - Hafren's road meshes were read with `acr-ref mesh-uv` (SM_WalesS4HafrenSouthTrack0104_Road_0). They have 5 UV
+     channels:
+     - UV0: tiling, 2.02 m across × 3.59 m along per unit.
+     - UV1: U 0..1 from edge to edge, V at 7.17 m.
+     - UV2 and UV4: a trajectory coordinate, U about −0.2..1.2 at 5.5 m, V at 100 m; UV4's U is 1 − UV2's.
+     - UV3: an unknown lateral vector.
+     - Vertex colour: R about 0, G 128, B 0, A mostly below 20.
+   - v1.7 writes UV0–UV2 in that layout from the DR2 centreline (distance along it, signed offset from it), and
+     UV4's mirror in UV3 (a PMC has 4 channels). The road vertex colour is (0, 128, 0, 10).
+   - Road-surface triangles more than 15 m from the centreline (DR2 side roads) are mapped world-planar at the same
+     scale. 96.6 % of road triangles are within 1.5× of the nominal scale; the rest are mostly bend insides.
+   - The terrain stays at the tex-proof's UV0 = world/4 m. The vista uses the terrain material at world/40 m.
 3. **Terrain painted to DR2's layout:** drive the 9-material blend with masks generated from DR2's terrain materials
-   (which DR2 surface sits where, from `terrain.glb` materials or `collision.glb` surface codes). Two variants:
+   (which DR2 surface sits where, from `terrain.glb` materials or `collision.glb` surface codes).
+   - Now verified: Hafren's terrain meshes (e.g. SM_WalesS4HafrenSouthTrack0104_Terrain_0) carry UV0 as a tile
+     coordinate at about 2.5 km per unit, and a constant (0, 1) in UV1 and UV2. So the masks are sampled by UV0.
+   - Our world/4 m UV0 is far outside 0..1, so the clamped masks give one edge texel everywhere. That is why the
+     ground shows a single uniform blend today.
+   - This makes variant 3a below the relevant one. Variants:
    - **3a (if the masks are UV-sampled):** assign each DR2 terrain triangle to one of the 34 Hafren tiles' MIs in
      separate sections, and give it tile UVs. Overwrite those tiles' `_M1`/`_M2` with masks rendered from DR2's
      layout. This needs a **virtual-texture writer**: DXT5 encoding, 128+4 px tiles, the mip chain, and the VTData
@@ -46,6 +59,12 @@ without the UE editor. Nothing beyond the material proof below is implemented.
      a non-VT texture will not bind, and 3a is required.
    - Effort: 3–5 days (the texture writer is most of it). Risk: medium. There is no editor to validate VT layouts, and
      a wrong layout shows as garbage, not a crash (inferred).
+   - **3c (cheap experiment first, no texture writing):** decode tile 1001's existing masks (read-only) and find spots
+     whose layer mix matches each DR2 surface class (grass, dirt, rock, ...). Then give each DR2 terrain triangle a
+     UV0 at its class's spot.
+     - This only works if the layer textures tile from world position rather than from UV0. A screenshot answers it:
+       if the ground goes blurry or flat, the layers use UV0, and 3a it is.
+     - Effort: about a day. Risk: low.
 4. **DR2's own colours (optional, more fidelity):** overwrite the BaseColor and normal of a few Hafren-only textures
    with DR2 NZ textures. Candidates: Hafren-only textures referenced by the 9-blend's layers, which still has to be
    checked. Shared Wales textures would change every Wales stage, so they are excluded.

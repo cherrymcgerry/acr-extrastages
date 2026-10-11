@@ -1,0 +1,22 @@
+# Sun position of the placed sky (stage-build --sky, build.ps1 v1.7 -Sky nz; -Sky host leaves the sky as shipped).
+# Edits the persistent level's BC_DMSky_Candidate_C actor: location and date only. Time of Day (15:59), clouds, fog
+# and weather stay with the game (the weather actor carries the same day time; the weather option drives the rest).
+# See docs/decisions.md D7 v1.6 (sky findings) and v1.7.
+
+[host]
+# Hafren South as shipped; must match the actor's bytes exactly (they locate the values)
+latitude = 52.28
+longitude = -3.4
+time_zone = 0
+year = 2025
+month = 11
+day = 3
+
+[nz]
+# Te Awanga, Hawke's Bay: NZ daylight time (UTC+13) on a mid-January afternoon
+latitude = -39.7
+longitude = 176.9
+time_zone = 13
+year = 2025
+month = 1
+day = 20

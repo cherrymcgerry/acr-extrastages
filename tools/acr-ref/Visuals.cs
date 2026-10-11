@@ -21,8 +21,9 @@ internal static class Visuals
     ///   vegetation: none (no non-solid geometry) | crowns (small tree crowns, see VisualObjects)
     ///   canopies: overrides [objects] canopies (clip | full | none)
     ///   vista: adds DR2's distant vista ring (render/vista.glb, see [vista]) as a last section
+    ///   textured: terrain, road and vista get the [textured] materials; the road gets road-following UVs (RoadUv)
     internal sealed record Options(string Host, bool Retarget, string? Owner, string Vegetation = "none", string? Canopies = null,
-                                   bool Vista = false)
+                                   bool Vista = false, bool Textured = false)
     {
         public static Options From(IReadOnlyDictionary<string, string> named) => new(
             named.GetValueOrDefault("visuals-host", "start"),
@@ -30,7 +31,8 @@ internal static class Visuals
             named.GetValueOrDefault("visuals-owner") is { Length: > 0 } ow ? ow : null,
             named.GetValueOrDefault("visuals-vegetation", "none"),
             named.GetValueOrDefault("visuals-canopies") is { Length: > 0 } cn ? cn : null,
-            named.GetValueOrDefault("visuals-vista", "0") != "0");
+            named.GetValueOrDefault("visuals-vista", "0") != "0",
+            named.GetValueOrDefault("visuals-textured", "0") != "0");
     }
 
     // by name: a round trip without the Blueprint containers cannot resolve the class imports
@@ -140,7 +142,15 @@ internal static class Visuals
             int pkgImp = cell.AddImport("/Script/CoreUObject", "Package", 0, path);
             return imported[path] = cell.AddImport("/Script/Engine", "MaterialInstanceConstant", pkgImp, name);
         }
-        var mats = new List<int> { 0, Mat("materials", "terrain"), Mat("materials", "road"), Mat("materials", "posts"), Mat("materials", "gates") };
+        string ground = "materials";
+        if (opt.Textured)
+        {
+            ground = "textured";
+            r["textured"] = RoadUv.Apply(ir, pl, cfg, road);
+            float k = (float)(4 / cfg.Num("textured", "terrain_uv_m"));
+            for (int i = 0; i < terrain.Uv.Count; i++) terrain.Uv[i] *= k;
+        }
+        var mats = new List<int> { 0, Mat(ground, "terrain"), Mat(ground, "road"), Mat("materials", "posts"), Mat("materials", "gates") };
         var sections = new List<ProcMesh.Section> { dummy, terrain, road, posts, gates };
         var sectionNames = new JsonArray("dummy", "terrain", "road", "posts", "gates");
         if (objects is not null && cfg.Num("objects", "enabled") != 0)
@@ -155,7 +165,12 @@ internal static class Visuals
         if (opt.Vista)
         {
             var (vista, vr) = BuildVista(ir, pl, cfg, terrain, road);
-            sections.Add(vista); mats.Add(Mat("vista", "material")); sectionNames.Add("vista");
+            if (opt.Textured)
+            {
+                float k = (float)(4 / cfg.Num("textured", "vista_uv_m"));
+                for (int i = 0; i < vista.Uv.Count; i++) vista.Uv[i] *= k;
+            }
+            sections.Add(vista); mats.Add(opt.Textured ? Mat("textured", "vista") : Mat("vista", "material")); sectionNames.Add("vista");
             r["vista"] = vr;
         }
         r["sections"] = sectionNames;
@@ -319,6 +334,18 @@ internal static class Visuals
             }
         }
         else if (probe is not null) C(false, "visuals road corridor: section names missing from the report");
+        if (opt.Textured)
+        {
+            var road = secs[2];
+            double nomU = cfg.Num("textured", "road_uv0_across_m"), nomV = cfg.Num("textured", "road_uv0_along_m");
+            var (inside, mu, mv) = RoadUv.Stretch(road, nomU, nomV);
+            double min = cfg.Num("textured", "road_stretch_min_fraction");
+            bool layout = new[] { road.Uv1, road.Uv2, road.Uv3 }.All(l => l.Count == road.Pos.Count)
+                          && road.Uv1.All(u => u.X >= 0 && u.X <= 1) && road.Color == RoadUv.Bgra(cfg, "road_color");
+            C(layout && inside >= min && Math.Abs(mu / nomU - 1) < 0.15 && Math.Abs(mv / nomV - 1) < 0.15,
+              $"visuals: road UVs follow the road: UV0 median {mu:0.##} m across / {mv:0.##} m along per unit (nominal {nomU} / {nomV}), " +
+              $"{inside:P1} of {road.Idx.Count / 3} triangles within 1.5x (min {min:P0}); UV1..UV3 on every vertex, UV1.U in 0..1, colour {road.Color:X8}");
+        }
         if (opt.Vista)
         {
             var vr = visualsReport?["vista"];

@@ -66,3 +66,22 @@ material = ""                   # engine default, like the terrain
 exclude_cell_m = 100            # vista triangles over a grid cell touched by the drawn ground are dropped
 min_distance_m = 50             # offline check: nearest vista vertex to the DR2 centreline (plan; DR2's own ring
                                 #   comes to ~83 m on nz01r5)
+
+[textured]
+# only with stage-build --visuals-textured 1 (build.ps1 v1.7+): Hafren's own lit materials on the ground sections
+# (the v1.3 tex-proof showed both render on the visuals mesh with the right look). Objects keep their flat colours.
+terrain = "/Game/Environments/WalesS4HafrenSouth/TerrainMaterialInstances/MI_Terrain9MatBlend1001"
+road = "/Game/Environments/WalesS4HafrenSouth/GravelMaterial/MI_WalesS4HafrenSouthGravelRoad1"
+vista = "/Game/Environments/WalesS4HafrenSouth/TerrainMaterialInstances/MI_Terrain9MatBlend1001"
+terrain_uv_m = 4                # terrain UV0 = world plan position / this (as in the tex-proof)
+vista_uv_m = 40                 # coarser on the distant ring
+# road UVs in the layout of Hafren's road meshes (acr-ref mesh-uv SM_WalesS4HafrenSouthTrack0104_Road_0: UV0 2.02 m
+# across x 3.59 m along per unit, UV1 0..1 edge to edge x 7.17 m, UV2/UV4 trajectory 5.5 m x 100 m)
+road_uv0_across_m = 2.0
+road_uv0_along_m = 3.6
+road_uv1_along_m = 7.2
+road_traj_across_m = 5.5
+road_traj_along_m = 100
+road_color = [0, 128, 0, 10]    # RGBA vertex colour; Hafren's road vertices are R ~0, G 128, B 0, A mostly < 20
+road_follow_max_m = 15          # road-surface triangles further from the DR2 centreline (side roads) get world-planar UVs
+road_stretch_min_fraction = 0.95  # offline check: road triangles whose UV0 scale is within 1.5x of nominal

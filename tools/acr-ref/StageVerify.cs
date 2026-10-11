@@ -135,6 +135,18 @@ internal static class StageVerify
         C(hafren.Any(kv => Math.Abs(kv.Value.GetOrDefault<float>("Length") - Math.Round(ir.LengthM / 1000, 3)) < 1e-3),
             $"a Hafren South variant has Length {Math.Round(ir.LengthM / 1000, 3)} km");
 
+        if (o.Named.GetValueOrDefault("sky") is { } skyCfg)
+        {
+            var cfg = Toml.Load(skyCfg);
+            var level = p.LoadPackage("acr/Content/Levels/WalesS4HafrenSouth.umap").GetExports();
+            var sky = level.Single(x => x.Name.StartsWith("BC_DMSky_Candidate_C_") && x.Outer?.Name == "PersistentLevel");
+            var got = new[] { "Latitude", "Longitude", "Time Zone" }.Select(f => (f, v: sky.GetOrDefault<double>(f)))
+                .Concat(new[] { "Year", "Month", "Day" }.Select(f => (f, v: (double)sky.GetOrDefault<int>(f)))).ToList();
+            bool ok = got.All(g => Math.Abs(g.v - cfg.Num("nz", g.f.Replace(" ", "_").ToLowerInvariant())) < 1e-9)
+                      && Math.Abs(sky.GetOrDefault<double>("Time of Day") - 1559.36) < 0.01;
+            C(ok, $"sky via CUE4Parse: {sky.Name}: {string.Join(", ", got.Select(g => $"{g.f} {g.v}"))}, Time of Day {sky.GetOrDefault<double>("Time of Day"):0.##} (unchanged)");
+        }
+
         w.WriteLine(failures == 0 ? "ALL PASS" : $"{failures} FAILURES");
         return failures == 0 ? 0 : 5;
     }

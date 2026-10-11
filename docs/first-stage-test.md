@@ -519,3 +519,58 @@ Report:
 - how the horizon looks;
 - the frame rate;
 - anything that broke compared with v1.5, such as audio, replay cameras or the start sequence.
+
+## v1.7 test: textured ground and road, Hawke's Bay sky
+
+`work\acr\dist-v1.7\zz_acrdirt_nz01r5_P.*`: same container name as v1.6, so install one or the other, never both.
+v1.6 in `work\acr\dist-v1.6` is unchanged, so its test can still be done first. Build:
+`.\mods\acrdirt-stage\build.ps1 -Version v1.7 -Verify`.
+- Offline: 123 PASS / 0 FAIL. This includes the sky actor re-read through CUE4Parse from the shipped container,
+  and the road UV layout on the round trip.
+- Sizes: ucas 418,590,148, utoc 78,032, pak 347. That is 21 MB more than v1.6, for the extra road UV channels and the
+  duplicated side-road vertices.
+- Triangles: 1,519,474, the same as v1.6.
+- `-Sky host` rebuilds v1.7 with Hafren's sky as shipped.
+
+What changed from v1.6 (details in docs/decisions.md, D7 v1.7; docs/visuals-plan.md steps 1–2):
+- **Textured materials:** the ground uses Hafren's terrain blend (`MI_Terrain9MatBlend1001`) and the road uses
+  Hafren's gravel (`MI_WalesS4HafrenSouthGravelRoad1`). The tex-proof showed both render correctly on our mesh.
+  - The objects keep their flat class colours, and the edge posts and gates are as before.
+- **Road UVs follow the road**, in the layout of Hafren's own road meshes:
+  - the gravel tiles about 2 m across and 3.6 m along, lined up with the road direction;
+  - a 0..1 edge-to-edge coordinate and a trajectory coordinate for the material's centre and ideal-line blending;
+  - vertex colour (0, 128, 0, 10), like Hafren's road.
+  - DR2 side roads (more than 15 m from the stage centreline) are mapped flat at the same scale.
+- **Terrain:** the same 4 m world mapping as the tex-proof, so one uniform blend everywhere. Painting it to DR2's
+  layout is visuals-plan step 3.
+- **Vista:** the terrain material at a coarse 40 m scale instead of the grey grid.
+- **Sky:** the placed sky actor is set to latitude −39.7, longitude 176.9, time zone UTC+13 and 20 January 2025.
+  - The time of day stays at 15:59, and clouds, fog and weather are left to the game. The sun should stand high in
+    the north-west, about 50° up, instead of low in the south-west.
+  - Inferred [I]: this works only if the sky recomputes the sun at runtime from these values. If the sun sits
+    exactly where it was in v1.6, the stored sun direction is used instead.
+
+Check:
+1. **Road texture:** gravel, not grid or flat colour.
+   - It should run along the road and keep the same scale through corners: no stripes across the road, no smearing.
+   - Look closely at a few hairpins, where the inside of the bend may look slightly compressed.
+   - Note whether there is a lighter centre strip or wheel tracks, and whether it looks too wet, too dark or too
+     shiny.
+2. **Road edges:** where the gravel meets the terrain, and at junctions with side roads. A visible seam where a side
+   road leaves the stage road is expected.
+3. **Terrain:** textured and lit, one uniform look (no DR2 layout yet).
+   - Note the scale: are the grass or dirt details about right next to the car, or tiny and repeating?
+4. **Horizon:** the vista hills textured, coarse but not noisy or flickering at a distance.
+5. **Sky and sun:** compare the sun's direction and height with v1.6 at the start line (for example, which way the
+   car's shadow points). Also note anything odd: night, a black sky, or a flashing sky.
+6. **Weather option:** if you can, try another weather or time in the menu, and note whether the sky follows it.
+7. **Frame rate:** compare with v1.6 (or v1.5). Lit layered materials cost more than the flat colours, so a small
+   drop is possible.
+8. As before: start, timer, pacenotes, respawn, trunks, names.
+
+Report:
+- a screenshot of the road at a straight and in a hairpin;
+- a screenshot of the terrain next to the road;
+- where the sun is, compared with v1.6;
+- the frame rate;
+- anything that broke.

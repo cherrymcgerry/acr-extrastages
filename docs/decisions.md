@@ -429,3 +429,31 @@ First stage: `new_zealand_rally_01_route_5` → `zz_acrdirt_nz01r5_P`. Built by 
       2. Change the WeatherConfig row from Wales to Greece (an FName swap that changes the weather simulation only).
       3. Swap the sky actor's class to another location's BP. This means rewiring the class, archetype and component
          templates; high risk.
+- **v1.7: textured ground and road, Hawke's Bay sky [V offline; in game pending]:** the build adds
+  `stage-build --visuals-textured 1 --sky config/sky.toml` (build.ps1 `-Sky nz|host`, default nz).
+  - Materials [V in game via the v1.3 tex-proof]: Hafren's MI_Terrain9MatBlend1001 and
+    MI_WalesS4HafrenSouthGravelRoad1 render lit and textured on the PMC. `[textured]` in config/visuals.toml puts them
+    on the terrain and road sections and puts the terrain MI on the vista. Objects keep their flat colours.
+  - Road UV layout [V offline: `acr-ref mesh-uv` on Hafren's road and terrain meshes]:
+    - Hafren road meshes have 5 UV channels and vertex colours (see docs/visuals-plan.md step 2).
+    - The PMC writer (`ProcMesh`) now also writes UV1–UV3 when a section fills them; sections without them serialize
+      as before.
+    - `RoadUv` projects each road vertex onto the DR2 centreline segments near its first triangle. That gives
+      distance along and signed offset, and from them UV0 (2 m × 3.6 m), UV1 (0..1 edge to edge over the DR2 gate
+      width × 7.2 m) and UV2/UV3 (trajectory ±5.5 m × 100 m).
+    - Road-surface triangles more than 15 m from the centreline (30,976, DR2 side roads) get their own vertices with
+      world-planar UVs.
+    - Check: UV0 median 2.01 × 3.6 m per unit, and 96.6 % of triangles within 1.5× of nominal (minimum 95 %).
+      UV1–UV3 are on every vertex and UV1.U is in 0..1.
+  - What the material does with UV1–UV3 and the vertex colour is inferred from its parameter names (TrajectoryUV,
+    RoadHeightBlend_Center*, TyreMarks_VertexColor*, VCGreenHeightDelta) [I].
+  - Terrain masks are UV0-sampled [V offline]: the terrain meshes' UV0 is a tile coordinate at about 2.5 km per unit.
+    Our world/4 m UV0 clamps to one edge texel, giving a uniform blend. This decides visuals-plan step 3 (3a or 3c).
+  - Sky [V offline, CUE4Parse re-read of the shipped container]:
+    - The BC_DMSky_C slot layout comes from the Blueprint classes' ChildProperties (`acr-ref sky-slots`). Latitude,
+      Longitude, Time Zone, Year, Month and Day are slots 265–270, and Time of Day is slot 18.
+    - The six values are located as one byte run of the host values ([host] in config/sky.toml). The run is
+      rewritten with [nz]: −39.7, 176.9, UTC+13, 2025-01-20. Time Zone moves out of the zero mask.
+    - CUE4Parse reads the new values back, with Time of Day unchanged at 1559.36.
+    - Whether the sky recomputes the sun from these values at runtime is not verified [I]. The level also stores the
+      Sun component's rotation from editor time; the in-game sun position answers it.

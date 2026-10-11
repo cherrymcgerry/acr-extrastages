@@ -45,6 +45,8 @@ internal static class Program
                 "procmesh-probe" => ProcMesh.Probe(opts),
                 "export-info" => ExportInfo(opts),
                 "scenery-survey" => Scenery.Survey(opts),
+                "mesh-uv" => MeshUv.Run(opts),
+                "sky-slots" => Sky.Probe(opts),
                 _ => Fail($"unknown command '{args[0]}'"),
             };
         }
