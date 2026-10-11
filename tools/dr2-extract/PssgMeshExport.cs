@@ -91,33 +91,78 @@ internal static class PssgMeshExport
                       ?? pssg.Elements<PssgLibrary>().FirstOrDefault(x => x.Type == "YYY")
                       ?? throw new InvalidDataException("no NODE library in pssg");
 
-        var scene = new SceneBuilder();
-        var materials = new Dictionary<PssgShaderInstance, (MaterialBuilder Builder, RenderMaterial Info)>();
-        var skipped = new List<string>();
-        Vector3 min = new(float.MaxValue), max = new(float.MinValue);
-        var triangles = 0;
-        var renderNodes = 0;
-        var windingMatches = 0;
-
+        var writer = new SceneWriter(keepTriangle, nodeFilter);
         foreach (var root in library.ChildElements.OfType<PssgNode>())
         {
-            Walk(root, Matrix4x4.Identity);
+            writer.Walk(root, Matrix4x4.Identity, null);
         }
-
-        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outGlb))!);
-        scene.ToGltf2().SaveGLB(outGlb);
 
         // Batched terrain (batched_track.fx) selects terrain_array shader instances indirectly, so list every
         // shader in the file; unreferenced ones keep Triangles == 0.
         foreach (var shader in pssg.Elements<PssgShaderInstance>())
         {
-            GetMaterial(shader);
+            writer.GetMaterial(shader);
         }
 
-        return new RenderExportResult(triangles, renderNodes, min, max,
-            materials.Values.Select(m => m.Info).ToList(), skipped, windingMatches);
+        return writer.Save(outGlb);
+    }
 
-        void Walk(PssgNode node, Matrix4x4 parentWorld)
+    /// <summary>
+    /// One glTF node and mesh per prototype (a PSSG node subtree, e.g. an object template's renderable), in the
+    /// prototype's own space. Returns the overall result plus per-prototype bounds and triangle counts.
+    /// </summary>
+    public static (RenderExportResult Result, Dictionary<string, (Vector3 Min, Vector3 Max, int Triangles)> Prototypes)
+        ExportPrototypes(IEnumerable<(string Name, IReadOnlyList<PssgNode> Nodes)> prototypes, string outGlb)
+    {
+        var writer = new SceneWriter(null, null);
+        var stats = new Dictionary<string, (Vector3 Min, Vector3 Max, int Triangles)>();
+        foreach (var (name, nodes) in prototypes)
+        {
+            var target = new PrototypeMesh(new MeshBuilder<VertexPositionNormal, VertexColor1Texture2, VertexEmpty>(name));
+            foreach (var node in nodes)
+            {
+                writer.Walk(node, Matrix4x4.Identity, target);
+            }
+
+            if (target.Triangles > 0)
+            {
+                writer.Scene.AddRigidMesh(target.Mesh, new NodeBuilder(name));
+                stats[name] = (target.Min, target.Max, target.Triangles);
+            }
+        }
+
+        return (writer.Save(outGlb), stats);
+    }
+
+    private sealed class PrototypeMesh(MeshBuilder<VertexPositionNormal, VertexColor1Texture2, VertexEmpty> mesh)
+    {
+        public MeshBuilder<VertexPositionNormal, VertexColor1Texture2, VertexEmpty> Mesh { get; } = mesh;
+
+        public Vector3 Min { get; set; } = new(float.MaxValue);
+
+        public Vector3 Max { get; set; } = new(float.MinValue);
+
+        public int Triangles { get; set; }
+    }
+
+    private sealed class SceneWriter(Func<Vector3, bool>? keepTriangle, string? nodeFilter)
+    {
+        public SceneBuilder Scene { get; } = new();
+
+        private readonly Dictionary<PssgShaderInstance, (MaterialBuilder Builder, RenderMaterial Info)> _materials = new();
+        private readonly List<string> _skipped = [];
+        private Vector3 _min = new(float.MaxValue), _max = new(float.MinValue);
+        private int _triangles, _renderNodes, _windingMatches;
+
+        public RenderExportResult Save(string outGlb)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outGlb))!);
+            Scene.ToGltf2().SaveGLB(outGlb);
+            return new RenderExportResult(_triangles, _renderNodes, _min, _max,
+                _materials.Values.Select(m => m.Info).ToList(), _skipped, _windingMatches);
+        }
+
+        public void Walk(PssgNode node, Matrix4x4 parentWorld, PrototypeMesh? target)
         {
             var world = node.ChildElements.OfType<PssgTransform>().FirstOrDefault()?.Transform * parentWorld ?? parentWorld;
             // Track terrain tiles come in pairs: <KIND>_i_j with the real shaders and <KIND>BATCH_i_j drawing the same
@@ -126,16 +171,16 @@ internal static class PssgMeshExport
             if (node is PssgVisibleRenderNode visible && !duplicate &&
                 (nodeFilter is null || node.Id.Contains(nodeFilter, StringComparison.OrdinalIgnoreCase)))
             {
-                ExportRenderNode(visible, world);
+                ExportRenderNode(visible, world, target);
             }
 
             foreach (var child in node.ChildElements.OfType<PssgNode>())
             {
-                Walk(child, world);
+                Walk(child, world, target);
             }
         }
 
-        void ExportRenderNode(PssgVisibleRenderNode node, Matrix4x4 world)
+        private void ExportRenderNode(PssgVisibleRenderNode node, Matrix4x4 world, PrototypeMesh? target)
         {
             var instances = node.RenderInstances.ToList();
             if (instances.Count == 0 && node is PssgLodVisibleRenderNode lod)
@@ -143,13 +188,13 @@ internal static class PssgMeshExport
                 instances = lod.LodRenderInstances.InstanceLists.FirstOrDefault()?.RenderInstances.ToList() ?? [];
             }
 
-            var mesh = new MeshBuilder<VertexPositionNormal, VertexColor1Texture2, VertexEmpty>(node.Id);
+            var mesh = target?.Mesh ?? new MeshBuilder<VertexPositionNormal, VertexColor1Texture2, VertexEmpty>(node.Id);
             var added = 0;
             foreach (var instance in instances)
             {
                 if (instance is not PssgRenderStreamInstance stream)
                 {
-                    skipped.Add($"{node.Id}: instance type {instance.Name}");
+                    _skipped.Add($"{node.Id}: instance type {instance.Name}");
                     continue;
                 }
 
@@ -158,7 +203,7 @@ internal static class PssgMeshExport
                     var shader = stream.TryGetShaderInstance();
                     if (shader is null)
                     {
-                        skipped.Add($"{node.Id}: missing shader {stream.Shader}");
+                        _skipped.Add($"{node.Id}: missing shader {stream.Shader}");
                         continue;
                     }
 
@@ -179,21 +224,29 @@ internal static class PssgMeshExport
                         face = face.LengthSquared() > 0 ? Vector3.Normalize(face) : Vector3.UnitY;
                         if (rds.HasNormals && Vector3.Dot(face, Vector3.TransformNormal(rds.Normal(a) + rds.Normal(b) + rds.Normal(c), world)) > 0)
                         {
-                            windingMatches++;
+                            _windingMatches++;
                         }
 
                         primitive.AddTriangle(Vertex(rds, a, pa, world, face), Vertex(rds, b, pb, world, face),
                             Vertex(rds, c, pc, world, face));
-                        min = Vector3.Min(min, Vector3.Min(pa, Vector3.Min(pb, pc)));
-                        max = Vector3.Max(max, Vector3.Max(pa, Vector3.Max(pb, pc)));
+                        var (lo, hi) = (Vector3.Min(pa, Vector3.Min(pb, pc)), Vector3.Max(pa, Vector3.Max(pb, pc)));
+                        _min = Vector3.Min(_min, lo);
+                        _max = Vector3.Max(_max, hi);
+                        if (target is not null)
+                        {
+                            target.Min = Vector3.Min(target.Min, lo);
+                            target.Max = Vector3.Max(target.Max, hi);
+                            target.Triangles++;
+                        }
+
                         material.Info.Triangles++;
-                        triangles++;
+                        _triangles++;
                         added++;
                     }
                 }
                 catch (Exception ex) when (ex is NotSupportedException or InvalidDataException or InvalidOperationException)
                 {
-                    skipped.Add($"{node.Id}: {ex.Message}");
+                    _skipped.Add($"{node.Id}: {ex.Message}");
                 }
             }
 
@@ -204,14 +257,18 @@ internal static class PssgMeshExport
 
             if (added > 0)
             {
-                scene.AddRigidMesh(mesh, new NodeBuilder(node.Id));
-                renderNodes++;
+                if (target is null)
+                {
+                    Scene.AddRigidMesh(mesh, new NodeBuilder(node.Id));
+                }
+
+                _renderNodes++;
             }
         }
 
-        (MaterialBuilder Builder, RenderMaterial Info) GetMaterial(PssgShaderInstance shader)
+        public (MaterialBuilder Builder, RenderMaterial Info) GetMaterial(PssgShaderInstance shader)
         {
-            if (materials.TryGetValue(shader, out var existing))
+            if (_materials.TryGetValue(shader, out var existing))
             {
                 return existing;
             }
@@ -225,7 +282,7 @@ internal static class PssgMeshExport
                 .ToList();
             var builder = new MaterialBuilder(shader.Id).WithMetallicRoughnessShader().WithBaseColor(Vector4.One);
             var entry = (builder, new RenderMaterial(shader.Id, shader.ShaderGroup.TrimStart('#'), textures));
-            materials.Add(shader, entry);
+            _materials.Add(shader, entry);
             return entry;
         }
     }

@@ -34,6 +34,8 @@ internal static class Program
                 "pssg-to-gltf" => PssgCommands.ToGltf(args[1..]),
                 "stage-ir" => await StageIr.Run(args[1..]),
                 "catalog" => await CatalogCommand.Run(args[1..]),
+                "pacenote-survey" => await PacenoteSurvey.Run(args[1..]),
+                "route-map-check" => await RouteMapCheck.Run(args[1..]),
                 _ => Usage(),
             };
         }
@@ -62,6 +64,7 @@ internal static class Program
               stage-ir <stage_id> [--render] [--corridor 250] [--out work/ir] [--dr2 <dir>] [--cache <dir>]
                        [--surface-map config/surface-map.toml]   DR2 stage -> work/ir/<stage_id>/ (docs/stage-ir.md)
               catalog [--filter _rally_] [--out work/dr2/catalog]   all stages + surface codes vs surface map
+              pacenote-survey [--filter _rally_] [--out work/dr2/pacenote-survey.md]   codriver field stats + geometry checks
             DR2 install: --dr2, else %DR2_DIR%, else C:\Games\DiRT Rally 2.0. Set DR2_DEBUG=1 for stack traces,
             DR2_PSSG_NODES=1 to list render nodes during pssg export.
             """);

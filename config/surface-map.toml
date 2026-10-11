@@ -102,3 +102,79 @@
 
 # --- other -----------------------------------------------------------------------------------------------------
 "DEFA" = "PM_Fallback"              # DEFAULT
+
+# =================================================================================================================
+# Object collision (route_N/objects.ens instances -> route_objecttypes.pssg shapes).
+#
+# [walls] keys are the shape classes of tracks/generic/physparams.xml (TEMPLATESHAPEPROPS id; the DR2 4-char object
+# material it sets is in the comment). Values must be ACR PM_Wall* materials, or "none" for shapes that are not
+# solid objects in DR2 (spawn markers). `dr2-extract stage-ir` fails on any class used in the corridor that is not
+# listed. DR2 classes describe physics (mass, hollow/solid) more than object type, so [wall_templates] overrides
+# the class by template-id prefix (longest prefix wins; never applied to "none" classes).
+# =================================================================================================================
+
+[walls]
+"sArmco" = "PM_WallMetalGuardrail"              # METS
+"sBalloon" = "PM_WallPlasticBarrier"            # PLAS, inflatable arches
+"sCardboard" = "PM_WallBasic"                   # CARD
+"sConcrete" = "PM_WallConcrete"                 # CONC: bridges, buildings, blocks
+"sCutout" = "PM_WallBasic"                      # COUT: spectator cut-outs
+"sDefault" = "PM_WallBasic"                     # METS, infinite mass (tractors etc.)
+"sDeformableRubber" = "PM_WallTire"             # DRUB
+"sDeformableTyreWall" = "PM_WallTire"           # DTYR
+"sGatecrasher" = "PM_WallPlasticBarrier"        # GATE (game-mode boards)
+"sGatecrasherYellow" = "PM_WallPlasticBarrier"  # GATY
+"sGoldrush" = "PM_WallBasic"                    # GRSH
+"sHardSoftVegetation" = "PM_WallBush"           # VEGL, core BSHL
+"sHaybail" = "PM_WallHayBale"                   # HAYB
+"sHaybailHeavy" = "PM_WallHayBale"              # HAYB
+"sHiddenLogo" = "PM_WallBasic"                  # LOGO
+"sHollowMetal" = "PM_WallMetalPole"             # METH
+"sLogPile" = "PM_WallWoodTreeTrunks"            # LOGS
+"sLogWood" = "PM_WallWoodTreeTrunks"            # LOGS
+"sMediumSoftVegetation" = "PM_WallBush"         # VEGM, core BSHM
+"sMetal" = "PM_WallMetalPole"                   # METS: poles, signs, scaffolding
+"sMetalCar" = "PM_WallBasic"                    # METC: parked cars
+"sMetalGateLight" = "PM_WallMetalPole"          # METH
+"sMetalHollowlarge" = "PM_WallMetalPole"        # METH
+"sMetalHollowSmall" = "PM_WallMetalPole"        # METH: sign posts, mailboxes, wire-fence spans
+"sMetalLetterBox" = "PM_WallMetalPole"          # METB
+"sMetalSolid" = "PM_WallMetalPole"              # METS
+"sPlastic" = "PM_WallPlasticBarrier"            # PLAS: cones, flags, blades
+"sPlasticHeavy" = "PM_WallPlasticBarrier"       # HPLA
+"sPlasticHollowLarge" = "PM_WallPlasticBarrier" # PLAH
+"sPlasticHollowSmall" = "PM_WallPlasticBarrier" # PLAH: road markers
+"sRubber" = "PM_WallTire"                       # RUBB
+"sRubberPole" = "PM_WallPlasticBarrier"         # DTFL: flexible marker poles
+"sSlidyMetal" = "PM_WallMetalGuardrail"         # METS
+"sSnowPile" = "PM_WallBush"                     # SNOW: soft snow banks; no snow wall in ACR
+"sSoftVegetation" = "PM_WallBush"               # VEGS, core BSHS
+"sSolidPalmShortTree" = "PM_WallWoodTreeTrunks" # TREP
+"sSolidTreeBrown" = "PM_WallWoodTreeTrunks"     # TREB
+"sSolidTreeLeafy" = "PM_WallWoodTreeTrunks"     # TREL
+"sSolidTreeLeafyShort" = "PM_WallWoodTreeTrunks" # TRLS
+"sSolidTreeRed" = "PM_WallWoodTreeTrunks"       # TRER
+"sSolidTreeWood" = "PM_WallWoodTreeTrunks"      # TREE
+"sSpawnableLarge" = "none"                      # SPWN: spawn markers
+"sSpawnableMedium" = "none"                     # SPWN
+"sSpawnableShakedown" = "none"                  # SPWN
+"sSpawnableSmall" = "none"                      # SPWN
+"sStone" = "PM_WallRock"                        # ROCK
+"sStoneRough" = "PM_WallRock"                   # ROCK
+"sStoneSmooth" = "PM_WallRock"                  # ROCK
+"sTyrewall" = "PM_WallTire"                     # TYRW
+"sWood" = "PM_WallWood"                         # WODS
+"sWood20kgs" = "PM_WallWood"                    # WODS
+"sWoodHollowLarge" = "PM_WallWood"              # WODH
+"sWoodHollowSmall" = "PM_WallWood"              # WODH
+"sWoodSolid" = "PM_WallWood"                    # WODS: route signs
+"sWoodSolo" = "PM_WallWoodPole"                 # WODP
+
+[wall_templates]
+"core_barr_fence_log" = "PM_WallWoodFence"
+"core_barr_fence_wire" = "PM_WallWoodFence"
+"core_barr_fence_wood" = "PM_WallWoodFence"
+"pole_tape" = "PM_WallWoodPole"
+"core_barr_armco" = "PM_WallMetalGuardrail"
+"core_barr_tyre" = "PM_WallTire"
+"core_barr_hay" = "PM_WallHayBale"
