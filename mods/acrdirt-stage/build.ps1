@@ -18,7 +18,11 @@
 .PARAMETER Stage    IR stage id under work\ir (default new_zealand_rally_01_route_5)
 .PARAMETER Short    container name part (default nz01r5)
 .PARAMETER Version  v1 = ground only, empty pacenotes, RespawnPlanes root moved (as first shipped);
+                    v1.1 = v1 + render-only visuals (DR2 ground, edge posts, start/finish gates; config/visuals.toml)
+                           and the DR2 ground lowered 47 m to the host terrain's mean (-> work\acr\dist-v1.1)
                     v2 = + object collision, pacenotes, respawn walls re-laid (default)
+.PARAMETER GroundOffset  metres added to the DR2 placement height (default -47 for v1.1, 0 otherwise)
+.PARAMETER NoVisuals  v1.1 without the visuals
 .PARAMETER Out      output folder for the container (default work\acr\dist for v1, work\acr\dist-v2 for v2)
 .PARAMETER Respawn  override the respawn mode: root (v1), sink (all walls 1 km down), relay (v2)
 .PARAMETER NoObjects / NoPacenotes  v2 without object collision / with the emptied pacenote table
@@ -28,7 +32,9 @@
 param(
     [string]$Stage = 'new_zealand_rally_01_route_5',
     [string]$Short = 'nz01r5',
-    [ValidateSet('v1', 'v2')][string]$Version = 'v2',
+    [ValidateSet('v1', 'v1.1', 'v2')][string]$Version = 'v2',
+    [double]$GroundOffset = [double]::NaN,
+    [switch]$NoVisuals,
     [string]$Out,
     [ValidateSet('', 'root', 'sink', 'relay')][string]$Respawn = '',
     [switch]$NoObjects,
@@ -97,6 +103,9 @@ if ($Version -eq 'v2') {
     if (-not $NoPacenotes -and -not $KeepPacenotes) { $sbArgs += @('--pacenote-map', (Join-Path $root 'config\pacenote-map.toml')) }
     if (-not $Respawn) { $Respawn = 'relay' }
 }
+if ($Version -eq 'v1.1' -and -not $NoVisuals) { $sbArgs += @('--visuals', (Join-Path $root 'config\visuals.toml')) }
+if ([double]::IsNaN($GroundOffset)) { $GroundOffset = if ($Version -eq 'v1.1') { -47 } else { 0 } }
+if ($GroundOffset -ne 0) { $sbArgs += @('--ground-offset', $GroundOffset.ToString([Globalization.CultureInfo]::InvariantCulture)) }
 if ($Respawn) { $sbArgs += @('--respawn', $Respawn) }
 Run $acrRef @sbArgs
 

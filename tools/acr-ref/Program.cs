@@ -40,6 +40,9 @@ internal static class Program
                 "stage-verify" => StageVerify.Run(opts),
                 "pacenote-survey" => Pacenotes.Survey(opts),
                 "surface-map-check" => SurfaceMapCheck.Run(opts),
+                "height-survey" => HeightSurvey.Run(opts),
+                "ground-at" => HeightSurvey.GroundAt(opts),
+                "procmesh-probe" => ProcMesh.Probe(opts),
                 _ => Fail($"unknown command '{args[0]}'"),
             };
         }

@@ -200,3 +200,45 @@ What to check, in addition to the v1 list:
 Isolation switches if v2 misbehaves (each writes to work\acr\dist-v2; rebuild, then reinstall):
 `-NoObjects` (no object collision), `-NoPacenotes` (emptied table as in v1), `-Respawn root|sink` (v1 walls / all
 walls sunk).
+
+## v1.1 test: visible road (fixed v1 + interim visuals)
+
+`work\acr\dist-v1.1\zz_acrdirt_nz01r5_P.*` uses the **same container name** as v1 and v2, so install only one of
+them: remove any other `zz_acrdirt_nz01r5_P.*` from `~mods` first.
+Build: `.\mods\acrdirt-stage\build.ps1 -Version v1.1 -Verify` (offline: PASS 46 / FAIL 0).
+Sizes: ucas 297,359,632, utoc 55,503, pak 347. It has the same collision, pacenotes and respawn walls as fixed v1
+(no objects).
+
+What changes (details in docs/decisions.md D6):
+- **Lower placement:** the whole DR2 stage sits 47 m lower, so it is on average level with Hafren's own terrain
+  instead of about 54 m above it. Hafren scenery will still poke through or hang above in places, and it has no
+  collision.
+- **Render-only geometry**, with no collision (it is drawn by the gameplay cell's start-trigger mesh):
+  - DR2 ground in the engine's grey world-grid material;
+  - the DR2 road surface in flat light blue;
+  - magenta posts, 1.2 m tall, every 15 m on both nominal road edges. These sit about 6 m from the centreline,
+    because the IR gate width is 12 m, so they are not the exact verge;
+  - green start and finish gates (5 m posts plus a banner).
+
+Check:
+1. At the start you see the light-blue road, the grey ground and the magenta posts. Drive the stage between the posts.
+2. Visuals match the physics: the wheels sit on the blue/grey surface, with no bumps where nothing is drawn.
+3. Whether the geometry stays visible along the whole stage, or disappears beyond some distance (note the distance
+   shown on the stage, or the time).
+4. Frame rate (the mesh is about 1 M triangles in one component).
+
+If nothing is drawn:
+- Rebuild with `-NoVisuals` to check the lowered placement on its own.
+- Rebuild with `-GroundOffset 0` to get v1 heights with the visuals.
+- Report whether the start/finish *triggers* still work (timing starts and stops). The visuals replace the
+  start-trigger's own mesh.
+
+Offline verification (stage-verify plus a CUE4Parse re-read of the shipped container) covers:
+- the component is visible, not hidden in game, and in world space;
+- 5 sections, all without collision, with indices in range and the expected materials;
+- 488 posts, each centred on its IR gate edge within 1 cm;
+- ground covering the centreline.
+
+A stage-validate re-check of the v1 run (`work\validate\nz01r5-run1.csv`) now passes fall-through. The s = 108 m
+event was the car resting 0.71 m above lower DR2 terrain 8.7 m left of the road, not a fall. Samples resting within
+2 m of DR2 ground no longer count as "below-road".

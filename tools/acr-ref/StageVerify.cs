@@ -87,6 +87,16 @@ internal static class StageVerify
         var reparam = centre.SelectToken("Properties.SplineCurves.ReparamTable.Points") as JArray;
         double len = reparam?.Last?["InVal"]?.Value<double>() / 100 ?? 0;
         C(pts == ir.Centre.Count, $"CenterSpline via CUE4Parse: {pts} points, {len:0.#} m (HUD route length; DR2 total {ir.TotalM:0.#} m)");
+        var startMesh = cell.Single(e => e.ExportType == "ProceduralMeshComponent" && e.Outer?.Name.ToString().StartsWith("BC_StartSequenceTrigger_C") == true);
+        var secs = startMesh.GetOrDefault<UScriptArray>("ProcMeshSections");
+        var mats = startMesh.GetOrDefault<UScriptArray>("OverrideMaterials");
+        var matJson = mats is null ? "" : JsonConvert.SerializeObject(mats);
+        if (secs is not null && secs.Properties.Count > 1)
+        {
+            var counts = secs.Properties.OfType<StructProperty>().Select(sp => (sp.Value?.StructType as FStructFallback)?.GetOrDefault<UScriptArray>("ProcVertexBuffer")?.Properties.Count ?? 0).ToList();
+            C(counts.Count == 5 && counts.Skip(1).All(c => c > 0) && mats?.Properties.Count == 5 && !startMesh.GetOrDefault<bool>("bHiddenInGame"),
+              $"visuals via CUE4Parse: start-trigger mesh {counts.Count} sections ({string.Join(", ", counts)} vertices), {mats?.Properties.Count ?? 0} material slots ({string.Join(", ", System.Text.RegularExpressions.Regex.Matches(matJson, @"MI_\w+").Select(m => m.Value).Distinct())}), not hidden in game");
+        }
         foreach (var name in new[] { "RaceSector", "BC_StartSequenceTrigger_C", "BC_EndSequenceTrigger_C", "BC_CompleStartTargetPoint_C" })
             foreach (var a in cell.Where(e => e.ExportType == name))
                 foreach (var comp in cell.Where(e => e.Outer?.Name.ToString() == a.Name && e.TryGetValue(out CUE4Parse.UE4.Objects.Core.Math.FVector _, "RelativeLocation")))

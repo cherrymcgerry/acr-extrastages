@@ -6,6 +6,9 @@ use crate::run::{field_stats, Sample};
 use serde::Serialize;
 use std::fmt::Write as _;
 
+/// A car position at most this far above a DR2 surface below it counts as resting on that ground (m).
+const SUPPORT_M: f64 = 2.0;
+
 #[derive(Clone, Debug)]
 pub struct CheckOpts {
     /// Off-route when |lateral| > half-width + this (m).
@@ -307,11 +310,17 @@ pub fn analyze(
         let mut kinds = Vec::new();
         let mut detail = Vec::new();
         let near_road = p.lateral.abs() <= p.half_width + 5.0;
-        if near_road && p.y < p.road_y - o.fall_m {
+        let gq = ground.map(|g| g.query([p.x, p.y, p.z]));
+        // off the road edge the terrain can lie lower than the road; a car resting on DR2 ground there is not falling
+        let supported = gq
+            .as_ref()
+            .and_then(|q| q.below)
+            .is_some_and(|h| p.y - h < SUPPORT_M);
+        if near_road && p.y < p.road_y - o.fall_m && !supported {
             kinds.push("below-road");
             detail.push(format!("{:.1} m below the IR road surface", p.road_y - p.y));
         }
-        if let Some(gq) = ground.map(|g| g.query([p.x, p.y, p.z])) {
+        if let Some(gq) = gq {
             if let Some(low) = gq.lowest {
                 if p.y < low - o.fall_m {
                     kinds.push("below-ground");

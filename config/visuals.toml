@@ -1,0 +1,20 @@
+# Interim visuals (stage-build --visuals, build.ps1 -Version v1.1): render-only geometry written into the forward
+# gameplay cell's start-trigger ProceduralMeshComponent. See docs/decisions.md D6 (v1.1).
+
+[road]
+# DR2 ground codes drawn with the road material; all other DR2 collision is drawn as terrain
+surfaces = ["GD0+", "CATG"]
+
+[markers]
+spacing_m = 15          # edge posts along both gate edges
+post_width_m = 0.3
+post_height_m = 1.2
+gate_height_m = 5       # start / finish gate posts and banner
+
+[materials]
+# "" = engine default material (lit world grid; shows the terrain shape). The MI_* are the game's own physical-surface
+# debug materials (unlit flat colours, parent M_PhysicalSurface).
+terrain = ""
+road = "/Game/Data/Gameplay/PhysicalMaterials/MI_SurfaceGravelFine"
+posts = "/Game/Data/Gameplay/PhysicalMaterials/MI_WallMetalPole"
+gates = "/Game/Data/Gameplay/PhysicalMaterials/MI_SurfaceGrass"

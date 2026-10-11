@@ -160,6 +160,62 @@ First stage: `new_zealand_rally_01_route_5` → `zz_acrdirt_nz01r5_P`. Built by 
   - In-game result: pending (`docs/first-stage-test.md`).
 - **Consequences:** the reverse variant becomes unusable while the mod is installed (shared
   BakedData). Visuals stay Hafren's until route A1 or a mesh writer exists.
+- **In-game result (fixed v1) [V]:** the stage loads, the menu shows 4.69 km, and the car drives on DR2
+  collision. stage-validate shows 100 % of loaded wheel contacts on DR2 ground. But nothing is visible: the
+  DR2 road is invisible and floats over Hafren's scenery.
+- **Placement height (v1.1) [V offline]:**
+  - `acr-ref height-survey` compares the DR2 gate heights with the vanilla host's up-facing collision at
+    the same XZ. The host data covers only 202 of 446 gates (s ≈ 0.7–2.7 km); elsewhere the route lies
+    outside Hafren's terrain footprint.
+  - With v1's placement, over those gates the DR2 road sits a median +54 m above the host ground (min −55,
+    max +157), and 72 gates are below it. That explains "floating in the sky": DR2 relief varies far more
+    than Hafren's, so no single offset fits everywhere.
+  - v1.1 lowers the placement by 47 m (`--ground-offset -47`, θ/XZ unchanged). That makes the mean
+    road-minus-host difference ≈ 0 (88 of 202 gates then lie below Hafren's visual terrain; it has no
+    collision there, because the host colliders are flattened). The DR2 collision minimum becomes 333 m,
+    still above the flattened host colliders (≤ 318 m) and inside the physics bounds. All stage-verify
+    collision checks pass unchanged.
+- **Interim visuals (v1.1) [V offline, in-game pending]:**
+  - These use only data edits; no editor and no new asset types. The forward gameplay cell already contains
+    2 ProceduralMeshComponents: the MeshComponent of `BC_StartSequenceTrigger_C` and of
+    `BC_EndSequenceTrigger_C`, both small rings with no collision. Their ProcMeshSections are a plain
+    UPROPERTY array of vertices and indices. `ProcMesh.cs` parses and writes it, with byte-exact round trips
+    on the host.
+  - v1.1 rewrites the start-trigger component in world space (absolute location, rotation and scale; visible;
+    not hidden in game) with 5 sections, all without collision:
+    - 0: a dummy triangle 50 m below the start, in case the trigger code sets slot 0's material.
+    - 1: DR2 non-road ground, using the engine default world-grid material.
+    - 2: DR2 road surfaces (`GD0+`, `CATG`), light-blue `MI_SurfaceGravelFine`.
+    - 3: edge posts every 15 m at the IR gate's left and right edges, 0.3 × 0.3 × 1.2 m, magenta
+      `MI_WallMetalPole`.
+    - 4: start and finish gates (5 m posts plus a banner), green `MI_SurfaceGrass`.
+  - The `MI_Surface*` materials are Kunos' unlit physical-surface debug colours. They are cooked, always
+    present, and need no textures.
+  - Config: `config/visuals.toml`. Size: the start-trigger export grows from 1.7 kB to 67.8 MB (390 k
+    terrain and 167 k road vertices). Car physics still comes only from BakedData.
+  - Risks: native trigger code could hide or rebuild the mesh at runtime. The gameplay cell loads for variant 1/2,
+    and the route was placed inside its content bounds plus the 640 m loading range (297 m margin). Whether
+    the cell actually stays streamed in around the whole route is still inferred.
+- **Real DR2 visuals: assessment [inferred, not implemented]:**
+  - **Geometry without the editor is feasible** if v1.1 renders. ProcMeshSections take arbitrary vertices, normals,
+    tangents, UV0–3 and colours, so DR2 terrain tiles and object glb meshes can be baked in with their own UVs.
+  - The limits are a PMC's CPU-side, uninstanced, LOD-less data. Thousands of trees would mean duplicated
+    vertices. The cell has only 2 PMCs; more components means writing new exports, which is a larger but
+    similar job.
+  - **Textures are the hard part.** PMC materials must be cooked material instances. The options are:
+    - (a) Overwrite the bulk data of existing cooked Texture2D assets (BCn encode plus mips, same format and size)
+      behind an MI used only on Hafren. This needs a texture writer, and it changes those textures wherever the
+      host uses them.
+    - (b) Write new Texture2D and MaterialInstanceConstant packages. This is more serializer work.
+  - Either way, DR2's multi-layer terrain blending won't map onto a single MI without a matching master material.
+  - **The UE 5.6 editor** gives proper StaticMeshes, LODs, instancing and materials. But it is about 60 GB, and
+    cooking against Kunos' engine build risks compatibility problems.
+  - **Recommendation:**
+    1. First confirm in game that v1.1's PMC renders.
+    2. Then go editor-less: textured terrain via (a) (about 2–4 days, medium risk), and objects merged per material
+       into PMC sections with simplified LODs (about 2–3 days, risk to frame rate).
+    3. Move to the editor only for full fidelity (foliage, blended terrain, LODs): 1–2 weeks plus the install, with
+       high risk from cook compatibility.
 
 ## D7. Single-stage port v2: surfaces, objects, pacenotes, respawn walls (nz01r5)
 

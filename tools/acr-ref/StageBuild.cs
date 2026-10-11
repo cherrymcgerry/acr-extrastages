@@ -19,7 +19,7 @@ internal static class StageBuild
 {
     // Host limits in physics metres (x = UE X, z = UE Y, y = UE Z). PhysicsWorldBounds of WalesS4HafrenSouth, and the
     // safe XZ region = forward gameplay cell content bounds grown by its 640 m loading range, intersected with them.
-    const double PhysMinX = -2048, PhysMaxX = 802, PhysMinZ = -964, PhysMaxZ = 2048;
+    internal const double PhysMinX = -2048, PhysMaxX = 802, PhysMinZ = -964, PhysMaxZ = 2048;
     const double SafeMinX = -1950, SafeMaxX = 802, SafeMinZ = -964, SafeMaxZ = 2048;
     const double GroundBase = 380;                 // physics y of the DR2 collision minimum (bounds y 305..534)
     const double HostFlatMin = 306, HostFlatMax = 318;
@@ -101,12 +101,13 @@ internal static class StageBuild
         bool keepPacenotes = o.Named.GetValueOrDefault("keep-pacenotes") is "1" or "true";
         var report = new JsonObject { ["stage"] = ir.Id, ["name"] = ir.Name, ["host"] = "WalesS4HafrenSouth forward (variant 1/2 \"Afon Bidno - Severn\")" };
 
-        var pl = Solve(ir);
+        double groundOffset = double.Parse(o.Named.GetValueOrDefault("ground-offset", "0"), CultureInfo.InvariantCulture);
+        var pl = Solve(ir, groundOffset);
         Console.WriteLine($"placement: theta {F(pl.ThetaDeg)} deg about DR2 ({F(pl.Cx)}, {F(pl.Cz)}), t = ({F(pl.Tx)}, {F(pl.Dy)}, {F(pl.Tz)}) m, slack {F(pl.Slack, "0.#")} m");
         report["placement"] = new JsonObject
         {
             ["formula"] = "physics = R_y(theta) * (dr2 - (cx, 0, cz)) + (tx, dy, tz); UE cm = (px, pz, py) * 100; R_y: x' = cos*x + sin*z, z' = -sin*x + cos*z",
-            ["theta_deg"] = pl.ThetaDeg, ["cx"] = pl.Cx, ["cz"] = pl.Cz, ["tx"] = pl.Tx, ["dy"] = pl.Dy, ["tz"] = pl.Tz, ["slack_m"] = pl.Slack,
+            ["ground_offset_m"] = groundOffset, ["theta_deg"] = pl.ThetaDeg, ["cx"] = pl.Cx, ["cz"] = pl.Cz, ["tx"] = pl.Tx, ["dy"] = pl.Dy, ["tz"] = pl.Tz, ["slack_m"] = pl.Slack,
         };
 
         var objectsCfg = o.Named.GetValueOrDefault("objects");
@@ -116,6 +117,7 @@ internal static class StageBuild
         report["options"] = new JsonObject
         {
             ["objects"] = objectsCfg, ["pacenote_map"] = pacenoteMap, ["respawn"] = respawnMode, ["keep_pacenotes"] = keepPacenotes,
+            ["visuals"] = o.Named.GetValueOrDefault("visuals"), ["ground_offset_m"] = groundOffset,
         };
         var road = Road(ir, pl);
 
@@ -154,7 +156,7 @@ internal static class StageBuild
 
     // ---------------- placement ----------------
 
-    static Placement Solve(Ir ir)
+    internal static Placement Solve(Ir ir, double groundOffset = 0)
     {
         var pts = ir.Gates.SelectMany(g => new[] { g.crossing, g.left, g.right }).Select(p => (x: p[0], z: p[2])).ToList();
         double cx = (pts.Min(p => p.x) + pts.Max(p => p.x)) / 2, cz = (pts.Min(p => p.z) + pts.Max(p => p.z)) / 2;
@@ -174,7 +176,7 @@ internal static class StageBuild
         }
         if (best.slack < 30) throw new InvalidOperationException($"route does not fit the host's safe region (slack {best.slack:0.#} m)");
         double tx = (SafeMinX + SafeMaxX) / 2 - best.rcx, tz = (SafeMinZ + SafeMaxZ) / 2 - best.rcz;
-        return new Placement(best.deg, cx, cz, tx, tz, GroundBase - ir.CollisionMin[1], best.slack);
+        return new Placement(best.deg, cx, cz, tx, tz, GroundBase + groundOffset - ir.CollisionMin[1], best.slack);
     }
 
     // ---------------- BakedData ----------------
@@ -594,6 +596,7 @@ internal static class StageBuild
             r["respawn"] = Respawn.Relay(cell, objs, contour, road, sinkAll: respawnMode == "sink");
             actors.Add($"respawn walls ({respawnMode}): {r["respawn"]!.ToJsonString()}");
         }
+        if (o.Named.GetValueOrDefault("visuals") is { } visualsCfg) r["visuals"] = Visuals.Build(cell, ir, pl, Toml.Load(visualsCfg));
         r["actors"] = actors;
         r["dr2_centre_length_m"] = newLine.Length / 100;
         foreach (var a in actors) Console.WriteLine($"  {a}");
@@ -741,6 +744,9 @@ internal static class StageBuild
         int lenHits = 0;
         for (int i = vd.AsSpan().IndexOf(lenPattern); i >= 0; i = vd.AsSpan(i + 1).IndexOf(lenPattern) is var j and >= 0 ? i + 1 + j : -1) lenHits++;
         C(lenHits == 1, $"DT_TracksVariants: Hafren South forward row Length = {F(km)} km (DR2 length_m {F(ir.LengthM, "0.#")})");
+
+        if (report["options"]?["visuals"]?.GetValue<string>() is { } visualsCfg)
+            failures += Visuals.Check(new LegacyPackage(HostPaths.Resolve(root, HostPaths.Cell)), ir, pl, Toml.Load(visualsCfg), w);
 
         var bpath = HostPaths.Resolve(root, HostPaths.Baked);
         _ = new LegacyPackage(bpath);
