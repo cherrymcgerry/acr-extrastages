@@ -78,6 +78,17 @@ internal static class StageBuild
         }
     }
 
+    internal const string PhysMatPrefix = "/Game/Data/Gameplay/PhysicalMaterials/";
+
+    /// Registered surfaces from a CUE4Parse export (acr-ref export) of DA_PhysMaterialsMappingCommon, as /Game asset paths.
+    internal static HashSet<string> LoadSurfaceRegistry(string exportJson)
+    {
+        var set = System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(exportJson), "\"ObjectPath\"\\s*:\\s*\"(/Game/[^\"]+?)\\.\\d+\"")
+            .Select(m => m.Groups[1].Value).ToHashSet();
+        if (set.Count < 10) throw new InvalidDataException($"{exportJson}: only {set.Count} registered physical materials; not a DA_PhysMaterialsMappingCommon export?");
+        return set;
+    }
+
     static string Need(Options o, string k) => o.Named.TryGetValue(k, out var v) ? v : throw new ArgumentException($"--{k} is required");
     static string F(double v, string fmt = "0.###") => v.ToString(fmt, CultureInfo.InvariantCulture);
 
@@ -98,18 +109,48 @@ internal static class StageBuild
             ["theta_deg"] = pl.ThetaDeg, ["cx"] = pl.Cx, ["cz"] = pl.Cz, ["tx"] = pl.Tx, ["dy"] = pl.Dy, ["tz"] = pl.Tz, ["slack_m"] = pl.Slack,
         };
 
-        int hostColliders = BuildBaked(ir, pl, legacy, outRoot, report);
+        var objectsCfg = o.Named.GetValueOrDefault("objects");
+        var pacenoteMap = o.Named.GetValueOrDefault("pacenote-map");
+        var respawnMode = o.Named.GetValueOrDefault("respawn", "root");
+        if (respawnMode is not ("root" or "sink" or "relay")) throw new ArgumentException("--respawn must be root (v1), sink or relay");
+        report["options"] = new JsonObject
+        {
+            ["objects"] = objectsCfg, ["pacenote_map"] = pacenoteMap, ["respawn"] = respawnMode, ["keep_pacenotes"] = keepPacenotes,
+        };
+        var road = Road(ir, pl);
+
+        // Kunos' track physics only knows the surfaces listed in DA_PhysMaterialsMappingCommon; a collider whose physical
+        // material is not listed gets no surface and crashes the stage load (Track.cpp, trackData.surfaceDef).
+        var registry = LoadSurfaceRegistry(Need(o, "surface-registry"));
+        var groundFallback = o.Named.GetValueOrDefault("unregistered-ground", PhysMatPrefix + "PM_SurfaceGrass");
+        if (!registry.Contains(groundFallback)) throw new ArgumentException($"--unregistered-ground {groundFallback} is not a registered surface");
+        var remap = new JsonObject();
+        foreach (var (gltf, asset) in ir.Materials.ToList())
+            if (!registry.Contains(asset)) { ir.Materials[gltf] = groundFallback; remap[gltf] = $"{asset} (not a registered surface) -> {groundFallback}"; }
+        report["surface_registry"] = new JsonObject { ["registered"] = registry.Count, ["remapped"] = remap };
+        if (remap.Count > 0) Console.WriteLine($"surfaces: remapped unregistered {string.Join(", ", remap.Select(kv => kv.Key))} -> {groundFallback}");
+
+        int hostColliders = BuildBaked(ir, pl, legacy, outRoot, report, objectsCfg is null ? null : Toml.Load(objectsCfg), road, registry);
         report["host_collider_count"] = hostColliders;
-        BuildCell(o, ir, pl, legacy, outRoot, report);
-        BuildTables(o, ir, legacy, outRoot, keepPacenotes, report);
+        var cellInfo = BuildCell(o, ir, pl, legacy, outRoot, report, respawnMode, road);
+        BuildTables(o, ir, legacy, outRoot, keepPacenotes, report, pacenoteMap is null ? null : Toml.Load(pacenoteMap), cellInfo);
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(reportPath))!);
         File.WriteAllText(reportPath, report.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         Console.WriteLine($"report -> {reportPath}");
 
-        int failures = Check(outRoot, ir, pl, hostColliders, Console.Out);
+        int failures = Check(outRoot, ir, pl, hostColliders, Console.Out, report);
         return failures == 0 ? 0 : 5;
     }
+
+    internal static RoadCorridor Road(Ir ir, Placement pl) =>
+        new(ir.Centre.Select(pl.ToUe).ToList(), ir.Gates.Select(g => pl.ToUe(g.left)).ToList(), ir.Gates.Select(g => pl.ToUe(g.right)).ToList());
+
+    static bool InPhysicsBounds(V3 p) => p.X >= PhysMinX && p.X <= PhysMaxX && p.Z >= PhysMinZ && p.Z <= PhysMaxZ;
+
+    /// What the pacenote table needs from the rebuilt cell: CenterSpline arc length per DR2 gate (m) and the
+    /// start line / finish line / stop zone positions along it (m).
+    internal sealed record CellInfo(double[] GateS, List<V3> CentreUe, double StartS, double FinishS, double StopS);
 
     // ---------------- placement ----------------
 
@@ -146,7 +187,8 @@ internal static class StageBuild
         public List<uint> I = new();
     }
 
-    static int BuildBaked(Ir ir, Placement pl, string legacy, string outRoot, JsonObject report)
+    static int BuildBaked(Ir ir, Placement pl, string legacy, string outRoot, JsonObject report, Toml? objectsCfg, RoadCorridor road,
+                          HashSet<string> registry)
     {
         var path = HostPaths.Resolve(legacy, HostPaths.Baked);
         var pkg = new LegacyPackage(path);
@@ -230,17 +272,49 @@ internal static class StageBuild
         }
         var all = chunks.OrderBy(kv => kv.Key).SelectMany(kv => kv.Value).Where(c => c.I.Count > 0).ToList();
         Console.WriteLine($"DR2 collision: {kept} triangles kept, {cropped} cropped outside the physics bounds, {all.Count} chunks");
+        int groundChunks = all.Count;
+
+        // DR2 objects: simple shapes -> new simple entries; cones -> small mesh colliders appended after the ground
+        ObjectColliders.Result? objs = null;
+        const string ObjPrefix = "/Game/Data/Gameplay/PhysicalMaterials/";
+        if (objectsCfg is not null)
+        {
+            var surfaces = new SurfaceGrid(Path.Combine(ir.Dir, "collision.glb"), pl);
+            objs = ObjectColliders.Build(Path.Combine(ir.Dir, "stage.json"), pl, objectsCfg, road, InPhysicsBounds, surfaces, ir.Centre.Select(pl.ToUe).ToList());
+            var objRemap = new JsonObject();
+            foreach (var s in objs.Kept.Where(s => !registry.Contains(ObjPrefix + s.Material)))
+            {
+                objRemap[s.Material] = $"not a registered surface -> PM_WallBasic";
+                s.Material = "PM_WallBasic";
+            }
+            objs.Report["unregistered_remapped"] = objRemap;
+            r["objects"] = objs.Report;
+            Console.WriteLine($"objects: {objs.Report["kept_total"]} shapes kept, {objs.Report["dropped_on_road_total"]} dropped on the road, skipped {objs.Report["skipped"]!.ToJsonString()}");
+            foreach (var g in objs.Kept.Where(s => s.MeshPhysics is not null).GroupBy(s => s.Material))
+            {
+                var ch = new Chunk { Material = ObjPrefix + g.Key };
+                foreach (var s in g)
+                {
+                    if (ch.V.Count + s.MeshPhysics!.Count > ChunkMaxVerts) { all.Add(ch); ch = new Chunk { Material = ch.Material }; }
+                    uint b = (uint)ch.V.Count;
+                    ch.V.AddRange(s.MeshPhysics);
+                    ch.I.AddRange(s.MeshTris!.Select(i => i + b));
+                }
+                if (ch.I.Count > 0) all.Add(ch);
+            }
+        }
 
         // physical materials (new imports for any the host does not reference)
         var pmIndex = new Dictionary<string, int>();
         var added = new JsonArray();
-        foreach (var (code, asset) in ir.Materials)
+        foreach (var asset in ir.Materials.Values.Concat(objs?.Kept.Select(s => ObjPrefix + s.Material) ?? []).Distinct())
         {
-            if (pmIndex.ContainsKey(asset)) continue;
+            if (!registry.Contains(asset)) throw new InvalidDataException($"{asset} is not a registered surface (DA_PhysMaterialsMappingCommon)");
             pmIndex[asset] = ResolveImport(pkg, asset, out bool isNew);
             if (isNew) added.Add(asset);
         }
         r["added_material_imports"] = added;
+        string AssetOf(Chunk c) => c.Material.StartsWith('/') ? c.Material : ir.Materials[c.Material];
 
         var reference = colliders[HostTemplateCollider];
         using var ms = new MemoryStream();
@@ -250,15 +324,47 @@ internal static class StageBuild
         var perMaterial = new Dictionary<string, long>();
         foreach (var ch in all)
         {
-            ms.Write(BakedEdit.BuildCollider(data, reference, ch.V, ch.I, pmIndex[ir.Materials[ch.Material]]));
+            ms.Write(BakedEdit.BuildCollider(data, reference, ch.V, ch.I, pmIndex[AssetOf(ch)]));
             perMaterial[ch.Material] = perMaterial.GetValueOrDefault(ch.Material) + ch.I.Count / 3;
         }
-        var none = meshMap.FirstOrDefault(e => e.Strides.Any(s => s.Index == 0))
-                   ?? throw new InvalidOperationException("could not identify the always-active (None) stride set");
-        none.Strides.Add(new BakedEdit.Stride { Index = (uint)colliders.Count, Num = (uint)all.Count });
-        ms.Write(data, simpleStart, mapStart - simpleStart);
-        ms.Write(BakedEdit.WriteMap(meshMap));
-        ms.Write(data, simpleMapStart, data.Length - simpleMapStart);
+        BakedEdit.MapEntry NoneKey(List<BakedEdit.MapEntry> map, string which) =>
+            map.SingleOrDefault(e => pkg.NameAt(e.NameIndex, e.NameNumber) == "None")
+            ?? throw new InvalidOperationException($"no always-active (None) key in the {which} stride map");
+        NoneKey(meshMap, "mesh").Strides.Add(new BakedEdit.Stride { Index = (uint)colliders.Count, Num = (uint)all.Count });
+
+        int simpleAdded = 0;
+        if (objs is not null && objs.Kept.Any(s => s.MeshPhysics is null))
+        {
+            // owner of the new entries: the host's foliage actor (the owner of its tree-trunk capsules)
+            int ownerEntry = Enumerable.Range(0, simple.Owners.Count).First(i =>
+                System.Text.Encoding.ASCII.GetString(data, simple.Owners[i].At, simple.Owners[i].End - simple.Owners[i].At).Contains("InstancedFoliageActor"));
+            var owner = data[simple.Owners[ownerEntry].At..simple.Owners[ownerEntry].End];
+            int hostSimple = BitConverter.ToInt32(data, simpleStart);
+            ms.Write(BitConverter.GetBytes(hostSimple + objs.Kept.Count(s => s.MeshPhysics is null)));
+            ms.Write(data, simpleStart + 4, mapStart - simpleStart - 4);
+            foreach (var s in objs.Kept.Where(s => s.MeshPhysics is null))
+            {
+                ms.Write(ObjectColliders.Entry(s, pmIndex[ObjPrefix + s.Material], owner));
+                simpleAdded++;
+            }
+            var simpleMapData = data.AsSpan(simpleMapStart).ToArray();
+            int sp = 0;
+            var simpleMap = BakedEdit.ReadMap(simpleMapData, ref sp);
+            NoneKey(simpleMap, "simple").Strides.Add(new BakedEdit.Stride { Index = (uint)hostSimple, Num = (uint)simpleAdded });
+            ms.Write(BakedEdit.WriteMap(meshMap));
+            ms.Write(BakedEdit.WriteMap(simpleMap));
+            ms.Write(simpleMapData, sp, simpleMapData.Length - sp);
+            r["simple_added"] = simpleAdded;
+            r["simple_stride"] = $"{{{hostSimple}, {simpleAdded}}} in the None key";
+            r["object_owner"] = System.Text.Encoding.ASCII.GetString(owner[20..^1]);
+        }
+        else
+        {
+            ms.Write(data, simpleStart, mapStart - simpleStart);
+            ms.Write(BakedEdit.WriteMap(meshMap));
+            ms.Write(data, simpleMapStart, data.Length - simpleMapStart);
+        }
+        r["object_mesh_colliders"] = all.Count - groundChunks;
         var outData = ms.ToArray();
         pkg.SetExportData(0, outData[..^4]);
         pkg.SaveTo(Path.Combine(outRoot, HostPaths.Baked + Path.GetExtension(path)));
@@ -350,7 +456,7 @@ internal static class StageBuild
         }
     }
 
-    static void BuildCell(Options o, Ir ir, Placement pl, string legacy, string outRoot, JsonObject report)
+    static CellInfo BuildCell(Options o, Ir ir, Placement pl, string legacy, string outRoot, JsonObject report, string respawnMode, RoadCorridor road)
     {
         var path = HostPaths.Resolve(legacy, HostPaths.Cell);
         var cell = new LegacyPackage(path);
@@ -383,6 +489,7 @@ internal static class StageBuild
         var newLine = new Polyline(centre);
 
         var splines = new JsonObject();
+        double[] gateS = [];
         foreach (var (name, pts) in new[] { ("CenterSpline", centre), ("IdealSpline", centre), ("LeftBorderSpline", left), ("RightBorderSpline", right), ("ContourSpline", contour) })
         {
             int e = cell.FindExport(name, "DMSplineComponent");
@@ -394,6 +501,8 @@ internal static class StageBuild
                 nc.Looped = hc.Looped; nc.LoopKeyOffset = hc.LoopKeyOffset;
             }
             if (host.Position.Looped) sc.Reparam = Splines.BuildReparam(sc.Position, true, 10);
+            if (name == "CenterSpline")
+                gateS = Enumerable.Range(0, pts.Count).Select(i => sc.Reparam.Points.First(p => Math.Abs(p.Out[0] - i) < 1e-6).InVal / 100.0).ToArray();
             split.Curves = sc;
             cell.SetExportData(e, Splines.JoinComponent(split));
             splines[name] = $"{host.Position.Points.Count} pts / {F(host.Reparam.Points[^1].InVal / 100, "0.#")} m -> {pts.Count} pts / {F(sc.Reparam.Points[^1].InVal / 100, "0.#")} m";
@@ -468,18 +577,38 @@ internal static class StageBuild
             actors.Add($"{role}: s {F(s / 100, "0.#")} m{(Math.Abs(s - s0) > 1 ? $" (clamped from {F(s0 / 100, "0.#")})" : "")}, lateral {F(lat / 100, "0.##")} m, up {F(upOff / 100, "0.##")} m, " +
                        $"UE ({F(newLoc.X, "0")}, {F(newLoc.Y, "0")}, {F(newLoc.Z, "0")}), {rot}");
         }
+        // Respawn walls. Their spline params are world positions (the SplineMeshComponents are not attached to the
+        // RespawnPlanes root), so moving the root, as v1 did, leaves them in place; see docs/decisions.md D7.
+        r["respawn_walls_left_in_place_audit"] = Respawn.AuditInPlace(cell, objs, road);
+        if (respawnMode == "root")
         {
             var obj = objs[respawn];
             var data = cell.GetExportData(respawn);
             var loc = Loc(obj);
             WriteDoubles(data, FindDoubles(data, Floats(obj, "RelativeLocation")) + 16, loc.Z - 100000);
             cell.SetExportData(respawn, data);
-            actors.Add($"RespawnPlanes root: Z {F(loc.Z, "0")} -> {F(loc.Z - 100000, "0")} (837 respawn walls moved 1 km down, out of the way)");
+            actors.Add($"RespawnPlanes root: Z {F(loc.Z, "0")} -> {F(loc.Z - 100000, "0")} (v1 behaviour; the walls are not attached to it and stay in place)");
+        }
+        else
+        {
+            r["respawn"] = Respawn.Relay(cell, objs, contour, road, sinkAll: respawnMode == "sink");
+            actors.Add($"respawn walls ({respawnMode}): {r["respawn"]!.ToJsonString()}");
         }
         r["actors"] = actors;
         r["dr2_centre_length_m"] = newLine.Length / 100;
         foreach (var a in actors) Console.WriteLine($"  {a}");
         cell.SaveTo(Path.Combine(outRoot, HostPaths.Cell + Path.GetExtension(path)));
+
+        double sm(double cm) => Math.Clamp(cm, minS, maxS) / 100;
+        double PolyToSpline(double polyCm)
+        {
+            int i = Array.BinarySearch(newLine.S, polyCm);
+            if (i < 0) i = ~i - 1;
+            i = Math.Clamp(i, 0, newLine.S.Length - 2);
+            double u = (polyCm - newLine.S[i]) / Math.Max(1e-9, newLine.S[i + 1] - newLine.S[i]);
+            return gateS[i] + u * (gateS[i + 1] - gateS[i]);
+        }
+        return new CellInfo(gateS, centre, PolyToSpline(SGate(start.gate)), PolyToSpline(SGate(finish.gate)), PolyToSpline(sm(newEnd) * 100));
     }
 
     static double NormDeg(double d) { d %= 360; return d > 180 ? d - 360 : d <= -180 ? d + 360 : d; }
@@ -509,7 +638,7 @@ internal static class StageBuild
 
     // ---------------- DataTables ----------------
 
-    static void BuildTables(Options o, Ir ir, string legacy, string outRoot, bool keepPacenotes, JsonObject report)
+    static void BuildTables(Options o, Ir ir, string legacy, string outRoot, bool keepPacenotes, JsonObject report, Toml? pacenoteMap, CellInfo cell)
     {
         var r = new JsonObject();
         report["tables"] = r;
@@ -530,6 +659,32 @@ internal static class StageBuild
         var ppath = HostPaths.Resolve(legacy, HostPaths.Pacenote);
         var pace = new LegacyPackage(ppath);
         if (keepPacenotes) { r["pacenotes"] = "kept host (Hafren South) table"; return; }
+        if (pacenoteMap is not null)
+        {
+            var table = Pacenotes.Read(pace);
+            int hostRows = table.Rows.Count;
+            var gd = ir.Gates.Select(g => g.distance).ToArray();
+            double ToSpline(double gateDistance)
+            {
+                int i = Array.BinarySearch(gd, gateDistance);
+                if (i < 0) i = ~i - 1;
+                i = Math.Clamp(i, 0, gd.Length - 2);
+                double u = Math.Clamp((gateDistance - gd[i]) / Math.Max(1e-9, gd[i + 1] - gd[i]), 0, 1);
+                return cell.GateS[i] + u * (cell.GateS[i + 1] - cell.GateS[i]);
+            }
+            var curve = Curvature.FromPoints(cell.CentreUe.Select(p => (p.X / 100, p.Y / 100)).ToList(), cell.GateS);
+            var pr = new JsonObject();
+            table.Rows = Pacenotes.Generate(Pacenotes.LoadTokens(Path.Combine(ir.Dir, "stage.json")), ToSpline, curve,
+                                            cell.StartS, cell.FinishS, cell.StopS, pacenoteMap, pr);
+            pace.SetExportData(0, Pacenotes.Write(table, pace));
+            pace.SaveTo(Path.Combine(outRoot, HostPaths.Pacenote + Path.GetExtension(ppath)));
+            pr["host_rows_replaced"] = hostRows;
+            pr["spline_m"] = new JsonObject { ["start_line"] = Math.Round(cell.StartS, 1), ["finish_line"] = Math.Round(cell.FinishS, 1), ["stop"] = Math.Round(cell.StopS, 1) };
+            r["pacenotes"] = pr;
+            Console.WriteLine($"pacenotes: {hostRows} host rows -> {pr["rows"]} rows from {pr["dr2_tokens"]} DR2 tokens ({pr["dr2_tokens_mapped"]} mapped; " +
+                              $"{pr["corners_localised_on_geometry"]}/{pr["corner_tokens"]} corners on geometry); unmapped {pr["unmapped"]!.ToJsonString()}");
+            return;
+        }
         var pd = pace.GetExportData(0);
         using var provider = Program.Open(o);
         var dt = provider.LoadPackage("acr/Content/Data/Pacenote/Tables/DT_PacenoteHafrenSouthForward.uasset").GetExports().OfType<CUE4Parse.UE4.Assets.Exports.Engine.UDataTable>().Single();
@@ -569,14 +724,23 @@ internal static class StageBuild
         var pl = new Placement(p["theta_deg"]!.GetValue<double>(), p["cx"]!.GetValue<double>(), p["cz"]!.GetValue<double>(),
             p["tx"]!.GetValue<double>(), p["tz"]!.GetValue<double>(), p["dy"]!.GetValue<double>(), p["slack_m"]!.GetValue<double>());
         using var w = o.Out is null ? Console.Out : new StreamWriter(o.Out);
-        int failures = Check(Need(o, "legacy"), ir, pl, report["host_collider_count"]!.GetValue<int>(), w);
+        int failures = Check(Need(o, "legacy"), ir, pl, report["host_collider_count"]!.GetValue<int>(), w, report);
         return failures == 0 ? 0 : 5;
     }
 
-    static int Check(string root, Ir ir, Placement pl, int hostCount, TextWriter w)
+    static int Check(string root, Ir ir, Placement pl, int hostCount, TextWriter w, JsonNode report)
     {
         int failures = 0;
         void C(bool ok, string what) { w.WriteLine($"{(ok ? "PASS" : "FAIL")} {what}"); if (!ok) failures++; }
+
+        var vpath = HostPaths.Resolve(root, HostPaths.Variants);
+        var vd = new LegacyPackage(vpath).GetExportData(0);
+        float km = (float)Math.Round(ir.LengthM / 1000, 3);
+        var lenPattern = BitConverter.GetBytes(km).Concat(BitConverter.GetBytes(345.0)).Concat(BitConverter.GetBytes(410.0))
+            .Concat(Convert.FromHexString("01000000B724EF43")).ToArray();
+        int lenHits = 0;
+        for (int i = vd.AsSpan().IndexOf(lenPattern); i >= 0; i = vd.AsSpan(i + 1).IndexOf(lenPattern) is var j and >= 0 ? i + 1 + j : -1) lenHits++;
+        C(lenHits == 1, $"DT_TracksVariants: Hafren South forward row Length = {F(km)} km (DR2 length_m {F(ir.LengthM, "0.#")})");
 
         var bpath = HostPaths.Resolve(root, HostPaths.Baked);
         _ = new LegacyPackage(bpath);
@@ -584,10 +748,21 @@ internal static class StageBuild
         var (cols, _, simpleStart) = BakedEdit.ParseColliders(data);
         var (mapStart, meshMap, _) = BakedEdit.LocateMaps(data, simpleStart);
         var simple = SimpleColliders.ParseExact(data, simpleStart, mapStart);
+        int objMesh = report["baked"]?["object_mesh_colliders"]?.GetValue<int>() ?? 0;
         var dr2 = cols.Skip(hostCount).ToList();
-        long tris = dr2.Sum(c => (long)c.Indices.Length / 3);
-        C(dr2.Count > 0 && cols.Count == hostCount + dr2.Count, $"BakedData re-read: {cols.Count} mesh colliders = {hostCount} host + {dr2.Count} DR2, {simple.Entries} simple entries");
+        var groundCols = dr2.Take(dr2.Count - objMesh).ToList();
+        long tris = groundCols.Sum(c => (long)c.Indices.Length / 3);
+        C(dr2.Count > 0 && cols.Count == hostCount + dr2.Count, $"BakedData re-read: {cols.Count} mesh colliders = {hostCount} host + {groundCols.Count} DR2 ground + {objMesh} DR2 object, {simple.Entries} simple entries");
         C(tris >= ir.CollisionTriangles * 0.99, $"DR2 triangles {tris} of {ir.CollisionTriangles} in the IR ({100.0 * tris / ir.CollisionTriangles:0.##}%)");
+        var road = Road(ir, pl);
+        if (report["baked"]?["simple_added"] is { } addedNode)
+        {
+            var cfg = Toml.Load(report["options"]!["objects"]!.GetValue<string>());
+            var surf = new SurfaceGrid(Path.Combine(ir.Dir, "collision.glb"), pl);
+            var roadSurf = cfg.Arr("road", "surfaces").Cast<string>().ToHashSet();
+            failures += CheckObjects(data, simpleStart, mapStart, simple, addedNode.GetValue<int>(), road,
+                                     (x, y) => surf.At(x / 100, y / 100) is { } s && roadSurf.Contains(s), w);
+        }
         C(meshMap.Any(e => e.Strides.Any(s => s.Index == hostCount && s.Num == dr2.Count)), $"always-active stride {{{hostCount}, {dr2.Count}}} present");
         float hostTop = cols.Take(hostCount).Max(c => c.Max.Y);
         float dr2Min = dr2.Min(c => c.Min.Y);
@@ -606,7 +781,7 @@ internal static class StageBuild
         double agree = (hostIsUp ? up : down) / (double)Math.Max(1, up + down);
         C(agree > 0.9, $"DR2 winding matches the host convention ({(hostIsUp ? "+Y" : "-Y")} normals): {agree:P1} of flat-ish DR2 triangles");
 
-        var ground = dr2;
+        var ground = groundCols;
         double maxGate = 0, sumGate = 0; int missGate = 0;
         foreach (var g in ir.Gates)
         {
@@ -643,6 +818,120 @@ internal static class StageBuild
             $"CenterSpline: {cs.Position.Points.Count} points, length {len:0.#} m (DR2 centreline polyline {polyLen:0.#} m)");
         var first = pl.ToUe(ir.Centre[0]);
         C((V3.From(cs.Position.Points[0].Out) - first).Length < 1, "CenterSpline starts at the DR2 run-up (first gate) and runs in driving order");
+
+        // object mesh colliders (cones) must not sit on the road at car height: raycast them along the centreline
+        if (objMesh > 0)
+        {
+            var objCols = dr2.Skip(dr2.Count - objMesh).ToList();
+            int hits = 0, samplesO = 0;
+            foreach (var g in ir.Gates)
+            {
+                var q = pl.ToPhysics(g.crossing);
+                samplesO++;
+                var h = BakedEdit.GroundHeight(objCols, new Vector2((float)q.X, (float)q.Z));
+                if (h is { } hv && hv > q.Y - 1 && hv < q.Y + 2.5) hits++;
+            }
+            C(hits == 0, $"object mesh colliders: {objMesh} colliders, {objCols.Sum(c => c.Indices.Length / 3)} triangles; {hits} of {samplesO} gate crossings have one at car height");
+        }
+
+        var respawnRep = report["cell"]?["respawn"];
+        if (respawnRep is not null)
+        {
+            var (placed, sunk, minClear, bad) = Respawn.Check(cell, road);
+            C(bad == 0 && placed == respawnRep["placed_along_dr2_contour"]!.GetValue<int>() && placed + sunk == respawnRep["walls"]!.GetValue<int>(),
+              $"respawn walls re-read: {placed} placed along the DR2 contour, {sunk} sunk 1 km down, {bad} with unexpected layout");
+            if (placed > 0) C(minClear >= 3, $"respawn walls: min clearance to the DR2 road edges {minClear:0.##} m (>= 3 m)");
+        }
+
+        var prep = report["tables"]?["pacenotes"];
+        if (prep is JsonObject)
+        {
+            var pace = new LegacyPackage(HostPaths.Resolve(root, HostPaths.Pacenote));
+            var t = Pacenotes.Read(pace);
+            bool sorted = true, tiled = true;
+            for (int i = 0; i + 1 < t.Rows.Count; i++)
+            {
+                if (t.Rows[i + 1].SplineDistanceM < t.Rows[i].SplineDistanceM) sorted = false;
+                if (t.Rows[i].SplineDistanceM + t.Rows[i].LengthM > t.Rows[i + 1].SplineDistanceM + 0.01f) tiled = false;
+            }
+            bool keys = t.Rows.Select((r, i) => r.Key == $"R{i:0000}").All(x => x);
+            C(t.Rows.Count == prep["rows"]!.GetValue<int>() && sorted && tiled && keys,
+              $"pacenote table re-read: {t.Rows.Count} rows, sorted {sorted}, non-overlapping {tiled}, keys R0000.. {keys}");
+            C(t.Rows.All(r => r.Tokens.Count > 0) && t.Rows[^1].SplineDistanceM + t.Rows[^1].LengthM <= len + 0.5,
+              $"pacenote rows: all have tokens, last ends at {t.Rows[^1].SplineDistanceM + t.Rows[^1].LengthM:0.#} m of the {len:0.#} m CenterSpline; finish call at {t.Rows.First(r => r.Tokens.Contains("Finish")).SplineDistanceM:0.#} m");
+        }
+        return failures;
+    }
+
+    /// Re-parses the appended simple entries and checks them against what the build reported.
+    static int CheckObjects(byte[] d, int simpleStart, int mapStart, SimpleColliders.Info simple, int added, RoadCorridor road,
+                            Func<double, double, bool> onRoadSurface, TextWriter w)
+    {
+        int failures = 0;
+        void C(bool ok, string what) { w.WriteLine($"{(ok ? "PASS" : "FAIL")} {what}"); if (!ok) failures++; }
+        int total = BitConverter.ToInt32(d, simpleStart);
+        int host = total - added;
+        C(simple.Entries == total, $"simple entries: {total} = {host} host + {added} DR2 objects");
+        int p = simple.Owners[host - 1].End;
+        int boxes = 0, capsules = 0, outOfWorld = 0, onRoad = 0, badRot = 0;
+        double minR = double.MaxValue, maxR = 0;
+        for (int i = 0; i < added; i++)
+        {
+            foreach (var s in Unv.ReadHeader(d, ref p))
+            {
+                if (s.Zero) continue;
+                switch (s.Index)
+                {
+                    case 0 or 2:
+                    {
+                        int n = BitConverter.ToInt32(d, p); p += 4;
+                        for (int k = 0; k < n; k++)
+                        {
+                            var vals = new Dictionary<int, double[]>();
+                            foreach (var e in Unv.ReadHeader(d, ref p))
+                            {
+                                if (e.Zero) { vals[e.Index] = [0]; continue; }
+                                int size = e.Index switch { 0 or 1 => 24, 6 when s.Index == 0 => 8, 5 when s.Index == 2 => 8, 7 when s.Index == 0 => 1, 8 when s.Index == 0 => 1, 6 when s.Index == 2 => 1, 7 when s.Index == 2 => 1, _ => 4 };
+                                vals[e.Index] = size == 24 ? [BitConverter.ToDouble(d, p), BitConverter.ToDouble(d, p + 8), BitConverter.ToDouble(d, p + 16)]
+                                              : size == 4 ? [BitConverter.ToSingle(d, p)] : [d[p]];
+                                p += size;
+                            }
+                            var c = vals[0]; var rot = vals[1];
+                            var (ax, ay, az) = ObjectColliders.RotationAxes(rot[0], rot[1], rot[2]);
+                            if (Math.Abs(ax.X * (ay.Y * az.Z - ay.Z * az.Y) - ax.Y * (ay.X * az.Z - ay.Z * az.X) + ax.Z * (ay.X * az.Y - ay.Y * az.X) - 1) > 1e-6) badRot++;
+                            var centre = new V3(c[0], c[1], c[2]);
+                            if (!InPhysicsBounds(new V3(c[0] / 100, c[2] / 100, c[1] / 100))) outOfWorld++;
+                            double reach;
+                            if (s.Index == 0) { boxes++; reach = 0; }
+                            else
+                            {
+                                capsules++;
+                                double r = vals[2][0];
+                                minR = Math.Min(minR, r); maxR = Math.Max(maxR, r);
+                                reach = r;
+                            }
+                            var (cl, z, _) = road.Query(centre.X, centre.Y);
+                            if (cl < 0 && centre.Z - reach < z + 250 && centre.Z + reach > z - 100 && onRoadSurface(centre.X, centre.Y)) onRoad++;
+                        }
+                        break;
+                    }
+                    case 3: p += 4; break;
+                    case 4:
+                        p += 16;
+                        int len = BitConverter.ToInt32(d, p); p += 4;
+                        p += len >= 0 ? len : -len * 2;
+                        break;
+                    default: throw new InvalidDataException($"simple collider property {s.Index}");
+                }
+            }
+        }
+        C(p == mapStart, $"added simple entries parse exactly to the stride maps ({added} entries: {boxes} boxes, {capsules} capsules, radius {minR:0.#}..{maxR:0.#} cm)");
+        C(badRot == 0 && outOfWorld == 0, $"added simple entries: {badRot} with a non-rotation, {outOfWorld} outside the physics bounds");
+        C(onRoad == 0, $"added simple entries: {onRoad} with their centre over the road surface at car height");
+        var mapsAt = mapStart;
+        var meshMap = BakedEdit.ReadMap(d, ref mapsAt);
+        var simpleMap = BakedEdit.ReadMap(d, ref mapsAt);
+        C(simpleMap.Any(e => e.Strides.Any(s => s.Index == host && s.Num == added)), $"simple stride {{{host}, {added}}} present");
         return failures;
     }
 }

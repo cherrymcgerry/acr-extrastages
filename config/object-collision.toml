@@ -1,0 +1,26 @@
+# Which DR2 object collision shapes (stage.json `objects`, docs/stage-ir.md) become ACR colliders.
+# Read by `acr-ref stage-build --objects <this file>`.
+#
+# ACR simple colliders cannot break or move, so anything DR2 knocks over easily would act as a solid wall.
+# The host (Hafren South) has no bush colliders at all (15188 of its 15326 simple colliders are PM_WallWoodTreeTrunks
+# capsules), and DR2's sSoftVegetation is drive-through, so bushes are skipped as well.
+
+[skip]
+shape_classes = ["sSoftVegetation", "sSpawnableShakedown"]
+# physparams impulse classes at which DR2 breaks the object (bLightest < bLight < bMedium < bHeavy; bPhantom has
+# no collision response worth keeping)
+breaks_on_impulse = ["bLightest", "bLight", "bPhantom"]
+
+[road]
+# Shapes whose footprint reaches into the road by more than max_penetration_m, at car height (road height
+# -1 m .. +2.5 m), are dropped and listed in the report. "Into the road" = inside the gates' left..right span
+# AND over one of these DR2 ground surfaces (the gates are a nominal 12 m wide on nz01r5, wider than the gravel,
+# so verge objects inside that span are kept). The report's objects.surface_across_road shows the measured split.
+surfaces = ["GD0+", "CATG"]
+max_penetration_m = 0.3
+car_height_min_m = -1.0
+car_height_max_m = 2.5
+
+[shapes]
+# cones (trunks, armco ends, traffic cones) become small double-sided mesh colliders with this many segments
+cone_segments = 8

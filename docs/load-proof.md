@@ -27,7 +27,7 @@ cd C:\Users\robbe\Projects\acr-dirt
 pwsh -NoProfile -File mods\acrdirt-loadproof\build.ps1            # add -Verify to re-read with CUE4Parse
 ```
 
-Output: `work\acr\dist\zz_acrdirt_test_P.{utoc,ucas,pak}` and `zz_acrdirt_ramp_P.{utoc,ucas,pak}`.
+Output: `work\acr\dist-loadproof\zz_acrdirt_test_P.{utoc,ucas,pak}` and `zz_acrdirt_ramp_P.{utoc,ucas,pak}`.
 
 ## 1. Install (manual, fully reversible)
 

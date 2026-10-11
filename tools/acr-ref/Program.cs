@@ -38,6 +38,7 @@ internal static class Program
                 "stage-build" => StageBuild.Run(opts),
                 "stage-check" => StageBuild.RunCheck(opts),
                 "stage-verify" => StageVerify.Run(opts),
+                "pacenote-survey" => Pacenotes.Survey(opts),
                 _ => Fail($"unknown command '{args[0]}'"),
             };
         }

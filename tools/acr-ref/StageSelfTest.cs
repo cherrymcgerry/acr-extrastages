@@ -27,6 +27,19 @@ internal static class StageSelfTest
         var simple = SimpleColliders.ParseExact(baked, simpleStart, mapStart);
         Check(true, $"baked: {colliders.Count} mesh colliders, {simple.Entries} simple entries ({simple.Boxes} boxes, {simple.Spheres} spheres, {simple.Capsules} capsules), {meshMap.Count} mesh map keys");
         Check(BakedEdit.WriteMap(meshMap).AsSpan().SequenceEqual(baked.AsSpan(mapStart, simpleMapStart - mapStart)), "stride map round trip");
+        if (o.Named.TryGetValue("dump-simple", out var ds))
+        {
+            var bpkg = new LegacyPackage(HostPaths.Resolve(root, HostPaths.Baked));
+            string Imp(int idx) => idx < 0 ? bpkg.ImportName(-idx - 1) : idx == 0 ? "null" : $"export{idx}";
+            var parts = ds.Split(',').Select(int.Parse).ToArray();
+            SimpleColliders.Dump(baked, simpleStart, parts[0], parts[1], Imp, Console.Out);
+            int sp = simpleMapStart;
+            var simpleMap = BakedEdit.ReadMap(baked, ref sp);
+            foreach (var (label, map) in new[] { ("mesh", meshMap), ("simple", simpleMap) })
+                foreach (var e in map)
+                    Console.WriteLine($"  {label} map key {bpkg.NameAt(e.NameIndex, e.NameNumber)}: {e.Strides.Count} strides, {e.Strides.Sum(s => s.Num)} entries, first {string.Join(" ", e.Strides.Take(4).Select(s => $"{{{s.Index},{s.Num}}}"))}");
+            Console.WriteLine("  names: " + string.Join(", ", bpkg.Names.Select((n, i) => $"{i}:{n}")));
+        }
 
         var cell = new LegacyPackage(HostPaths.Resolve(root, HostPaths.Cell));
         if (o.Filter is not null)

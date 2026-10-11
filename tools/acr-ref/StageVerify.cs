@@ -38,12 +38,50 @@ internal static class StageVerify
         }
         C(arr.Properties.Count > 734, $"BakedData via CUE4Parse: {arr.Properties.Count} mesh colliders, {tris} triangles");
         foreach (var (k, v) in materials.OrderByDescending(kv => kv.Value)) w.WriteLine($"     {k}: {v} triangles");
-        var wanted = ir.Materials.Values.Select(a => a[(a.LastIndexOf('/') + 1)..]).Distinct().ToList();
+        var registryJson = JsonConvert.SerializeObject(p.LoadPackage("acr/Content/Data/Gameplay/PhysicalMaterials/DA_PhysMaterialsMappingCommon.uasset").GetExports());
+        var registered = System.Text.RegularExpressions.Regex.Matches(registryJson, @"PhysicalMaterials/(PM_\w+)\.\d+").Select(m => m.Groups[1].Value).ToHashSet();
+        var unregistered = materials.Keys.Where(k => !registered.Contains(k)).ToList();
+        C(registered.Count >= 10 && unregistered.Count == 0,
+          $"every mesh collider material is a registered surface ({registered.Count} in DA_PhysMaterialsMappingCommon){(unregistered.Count > 0 ? $"; UNREGISTERED {string.Join(", ", unregistered)}" : "")}");
+        var wanted = ir.Materials.Values.Select(a => a[(a.LastIndexOf('/') + 1)..]).Where(registered.Contains).Distinct().ToList();
         var missing = wanted.Where(m => !materials.ContainsKey(m)).ToList();
         C(missing.Count == 0 && !materials.ContainsKey("null"),
             $"every collider's physical material resolves; DR2 materials present: {string.Join(", ", wanted)}{(missing.Count > 0 ? $"; MISSING {string.Join(", ", missing)}" : "")}");
 
+        var simple = baked.GetOrDefault<UScriptArray>("BakedSimpleCollisionData");
+        if (simple is not null)
+        {
+            var simpleMats = new Dictionary<string, int>();
+            int boxes = 0, caps = 0;
+            foreach (var el in simple.Properties.Skip(15326))
+            {
+                if (el is not StructProperty { Value.StructType: FStructFallback s }) continue;
+                boxes += s.GetOrDefault<UScriptArray>("Boxes")?.Properties.Count ?? 0;
+                caps += s.GetOrDefault<UScriptArray>("Capsules")?.Properties.Count ?? 0;
+                var tag = s.Properties.FirstOrDefault(t => t.Name.Text == "PhysMaterial")?.Tag;
+                var m = System.Text.RegularExpressions.Regex.Match(tag is null ? "null" : JsonConvert.SerializeObject(tag), @"PM_\w+");
+                var key = m.Success ? m.Value : "null";
+                simpleMats[key] = simpleMats.GetValueOrDefault(key) + 1;
+            }
+            int added = simple.Properties.Count - 15326;
+            var simpleUnreg = simpleMats.Keys.Where(k => !registered.Contains(k)).ToList();
+            C(simpleUnreg.Count == 0, $"every added simple collider material is a registered surface{(simpleUnreg.Count > 0 ? $"; UNREGISTERED {string.Join(", ", simpleUnreg)}" : "")}");
+            C(added >= 0 && boxes + caps == added && !simpleMats.ContainsKey("null"),
+              $"BakedSimpleCollisionData via CUE4Parse: {simple.Properties.Count} entries = 15326 host + {added} added ({boxes} boxes, {caps} capsules), all materials resolve");
+            foreach (var (k, v) in simpleMats.OrderByDescending(kv => kv.Value)) w.WriteLine($"     {k}: {v} simple colliders");
+            if (added > 0)
+                w.WriteLine($"     first added entry: {JsonConvert.SerializeObject(simple.Properties[15326]).Replace("\n", "")[..Math.Min(600, JsonConvert.SerializeObject(simple.Properties[15326]).Length)]}");
+        }
+
         var cell = p.LoadPackage("acr/Content/Levels/WalesS4HafrenSouth/_Generated_/22VG0QIP9ATUQI633K86KWPFP.umap").GetExports().ToList();
+        var walls = cell.Where(e => e.ExportType == "SplineMeshComponent").ToList();
+        int moved = walls.Count(wl => wl.TryGetValue(out CUE4Parse.UE4.Objects.Core.Math.FVector _, "RelativeLocation"));
+        int hidden = walls.Count(wl => wl.GetOrDefault<bool>("bHiddenInGame"));
+        int withParams = walls.Count(wl => wl.TryGetValue(out FStructFallback _, "SplineParams"));
+        int placed = walls.Count(wl => wl.TryGetValue(out CUE4Parse.UE4.Objects.Core.Math.FVector s, "RelativeScale3D") && s.Z > 1.01);
+        int rotated = walls.Count(wl => wl.TryGetValue(out CUE4Parse.UE4.Objects.Core.Math.FRotator r, "RelativeRotation") && Math.Abs(r.Yaw) > 1e-3);
+        C(hidden == walls.Count && withParams == walls.Count,
+          $"respawn walls via CUE4Parse: {walls.Count} SplineMeshComponents, {moved} with a RelativeLocation, {placed} scaled along the DR2 contour ({rotated} rotated), {moved - placed} sunk; all still hidden with SplineParams");
         var centre = JToken.Parse(JsonConvert.SerializeObject(cell.Single(e => e.Name == "CenterSpline")));
         int pts = centre.SelectToken("Properties.SplineCurves.Position.Points")?.Count() ?? 0;
         var reparam = centre.SelectToken("Properties.SplineCurves.ReparamTable.Points") as JArray;
@@ -58,7 +96,17 @@ internal static class StageVerify
                 }
 
         var pace = p.LoadPackage("acr/Content/Data/Pacenote/Tables/DT_PacenoteHafrenSouthForward.uasset").GetExports().OfType<UDataTable>().Single();
-        C(true, $"DT_PacenoteHafrenSouthForward via CUE4Parse: {pace.RowMap.Count} rows");
+        var tokenTable = p.LoadPackage("acr/Content/Data/Pacenote/Config/DT_PacenoteTokens_EA.uasset").GetExports().OfType<UDataTable>().Single();
+        var known = tokenTable.RowMap.Keys.Select(k => k.Text).ToHashSet();
+        var used = new List<string>();
+        foreach (var (_, row) in pace.RowMap)
+            if (row.TryGetValue(out FStructFallback tl, "TokenList"))
+                used.AddRange(tl.GetOrDefault<UScriptArray>("Tokens")?.Properties.Select(t => t.GenericValue?.ToString() ?? "") ?? []);
+        var unknown = used.Where(t => !known.Contains(t)).Distinct().ToList();
+        C(unknown.Count == 0, $"DT_PacenoteHafrenSouthForward via CUE4Parse: {pace.RowMap.Count} rows, {used.Count} tokens, all in DT_PacenoteTokens_EA ({known.Count} tokens){(unknown.Count > 0 ? $"; UNKNOWN {string.Join(", ", unknown)}" : "")}");
+        foreach (var (k, row) in pace.RowMap.Take(3).Concat(pace.RowMap.TakeLast(2)))
+            w.WriteLine($"     {k.Text}: {row.GetOrDefault<float>("SplineDistanceM"):0.#} m, L {row.GetOrDefault<float>("LengthM"):0.#}, link {row.GetOrDefault<bool>("LinkToNext")}, " +
+                        $"{string.Join(' ', row.GetOrDefault<FStructFallback>("TokenList")?.GetOrDefault<UScriptArray>("Tokens")?.Properties.Select(t => t.GenericValue?.ToString()) ?? [])}");
 
         var variants = p.LoadPackage("acr/Content/Data/Database/Main/TrackSelection/DT_TracksVariants.uasset").GetExports().OfType<UDataTable>().Single();
         var hafren = variants.RowMap.Where(kv => JsonConvert.SerializeObject(kv.Value).Contains("HafrenSouth")).ToList();

@@ -24,8 +24,10 @@ $root = (Resolve-Path "$PSScriptRoot\..\..").Path
 $work = Join-Path $root 'work\acr'
 if (-not $Retoc) { $Retoc = Join-Path $root 'work\bin\bin\retoc.exe' }
 if (-not (Test-Path $Retoc)) { throw "retoc not found at $Retoc" }
-$paks = Join-Path $Game 'acr\Content\Paks'
-if (-not (Test-Path (Join-Path $paks 'global.utoc'))) { throw "no ACR Paks at $paks" }
+. (Join-Path $root 'mods\common\vanilla.ps1')
+# game inputs come from a vanilla-only view (no ~mods: an installed load-proof would otherwise feed back into the build)
+$vanilla = New-VanillaView $Game (Join-Path $work 'vanilla')
+$paks = Join-Path $vanilla 'acr\Content\Paks'
 
 function Run([string]$exe) {
     & $exe @args
@@ -35,14 +37,17 @@ function Run([string]$exe) {
 $acrRef = Join-Path $root 'work\bin\acr-ref\acr-ref.exe'
 Run dotnet build (Join-Path $root 'tools\acr-ref\AcrRef.csproj') -c Release -o (Split-Path $acrRef) --nologo -v q
 
-$legacy = Join-Path $work 'legacy'
+$legacy = Join-Path $work 'legacy-vanilla'
+if (-not (Test-VanillaStamp $legacy)) { Remove-Item -Recurse -Force $legacy -ErrorAction SilentlyContinue }
 $dtRel = 'acr\Content\Data\Database\Main\TrackSelection\DT_TracksVariants'
 $bdRel = 'acr\Content\Environments\WalesS4HafrenSouth\DataAssets\DA_WalesS4HafrenSouthBakedData'
 foreach ($p in @(@($dtRel, 'DT_TracksVariants'), @($bdRel, 'DA_WalesS4HafrenSouthBakedData'))) {
     if (-not (Test-Path (Join-Path $legacy "$($p[0]).uexp"))) {
+        Assert-VanillaPaks $paks
         Run $Retoc to-legacy --version UE5_6 --no-shaders --filter $p[1] $paks $legacy
     }
 }
+Write-VanillaStamp $legacy $paks
 
 # (a) DataTable override: patch the FullForward Length float. The reverse row has identical Length and
 # Elevation, so the match is anchored on ElevationAtStart (int32 1, f32 478.28683) as well.
@@ -61,7 +66,7 @@ Remove-Item -Recurse -Force $modRamp -ErrorAction SilentlyContinue
 Run $acrRef baked-add-ramp --uexp (Join-Path $legacy "$bdRel.uexp") --ref-collider 10 `
     --at '-1014.34,939.68' --dir '-19.77,2.98' --width 6 --length 8 --rise 1 --out (Split-Path (Join-Path $modRamp $bdRel))
 
-$dist = Join-Path $work 'dist'
+$dist = Join-Path $work 'dist-loadproof'
 New-Item -ItemType Directory -Force $dist | Out-Null
 Remove-Item (Join-Path $dist 'zz_acrdirt_*') -ErrorAction SilentlyContinue
 Run $Retoc to-zen --version UE5_6 $modDt (Join-Path $dist 'zz_acrdirt_test_P.utoc')

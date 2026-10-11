@@ -1,0 +1,71 @@
+# DR2 normalized pacenote tokens (stage.json `pacenotes.tokens`, docs/stage-ir.md) -> ACR pacenote tokens
+# (row names of /Game/Data/Pacenote/Tables/DT_PacenoteTokens_EA). Read by `acr-ref stage-build --pacenote-map`.
+#
+# Verified on the host (acr-ref pacenote-survey on DT_PacenoteHafrenSouthForward vs its CenterSpline):
+# - ACR severity 6 is the fastest corner and 1 the slowest (median min radius Left2 18 m .. Left6 109 m), the same
+#   direction as DR2's "6" (fastest) .. "1" scale, so severities map one to one.
+# - A row's SplineDistanceM is where the corner starts (metres along the CenterSpline from its first point) and
+#   LengthM spans the corner; corner rows and DistNN straight rows tile the road one after another.
+# Anything not mapped here is logged as unmapped in the stage report and dropped.
+
+[direction]
+left = "Left"
+right = "Right"
+
+# `{Dir}` is replaced by the [direction] value.
+[severity]
+"6" = "{Dir}6"
+"5" = "{Dir}5"
+"4" = "{Dir}4"
+"3" = "{Dir}3"
+"2" = "{Dir}2"
+"1" = "{Dir}1"
+square = "{Dir}Square"
+hairpin = "{Dir}HP"
+
+# Appended after the corner token. DR2's raw modifier_a_<n> / modifier_b_<n> codes other than dont_cut are not
+# decoded (docs/dr2-formats.md), so they stay unmapped.
+[modifiers]
+dont_cut = "DontCut"
+
+# DR2 spoken distances between linked corners. ACR has no call below Dist40; its own tables use a conjunction for
+# such short gaps, so these become "And" on the following corner (and link the two rows).
+[distance]
+"20" = "And"
+"30" = "And"
+
+[finish]
+finish = "Finish"
+
+# Row layout.
+[layout]
+# Rows of corners from the same DR2 call (one recorded phrase) are linked (LinkToNext) and the later ones get a
+# conjunction, like the host's 2-3 row chains. Between calls, straights (corner end -> next corner start) of at
+# least straight_min_m get a DistNN row with the largest token not above the gap.
+straight_min_m = 40
+straights = ["Dist40", "Dist50", "Dist60", "Dist70", "Dist80", "Dist90", "Dist100", "Dist130", "Dist150", "Dist170", "Dist200", "Dist250", "Dist300", "Dist350", "Dist400"]
+straight_values_m = [40, 50, 60, 70, 80, 90, 100, 130, 150, 170, 200, 250, 300, 350, 400]
+long_straight = "LongStraight"
+long_straight_m = 500
+# Conjunction on a linked corner row: gap below into_max_m -> "Into", else "And".
+into = "Into"
+and = "And"
+into_max_m = 15
+# Corner localisation: a DR2 call is read before the corner; the corner it names is the first unassigned geometric
+# corner of the same direction starting within [read - search_back_m, read + search_ahead_m].
+search_back_m = 30
+search_ahead_m = 300
+# If none matches, the row is placed fallback_ahead_m after the read point with fallback_length_m.
+fallback_ahead_m = 80
+fallback_length_m = 30
+# Geometric corners: runs where the radius (heading change over curvature_window_m) is below corner_radius_m,
+# merged across gaps under merge_gap_m, kept if they turn at least min_turn_deg.
+curvature_window_m = 20
+corner_radius_m = 250
+merge_gap_m = 10
+min_turn_deg = 8
+# The finish call spans the last finish_length_m before the finish line (the host's is 47 m).
+finish_length_m = 50
+# After the finish line: the host's stop-zone call, placed stop_ahead_m before the stop trigger.
+after_finish = ["Pause0.5s", "StopAtMarshals"]
+stop_ahead_m = 30

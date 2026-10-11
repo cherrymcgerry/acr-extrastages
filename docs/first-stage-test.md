@@ -139,3 +139,32 @@ $sv = 'tools\stage-validate\target\release\stage-validate.exe'
 
 The check prints PASS/WARN/FAIL per item and writes `work\validate\nz01r5-run1.svg`. One recording per attempt
 is easiest. If you use ACR Rewind, the rewinds show up as "teleports", not as falls.
+
+## v1 crash on stage start (fixed; rebuilt v1 in work\acr\dist)
+
+Symptom (first in-game test): menu showed 4.69 km, then starting the stage crashed with
+`EXCEPTION_ACCESS_VIOLATION reading address 0xffffffffffffffff` ~7 s after `WalesS4HafrenSouth` loaded.
+
+Diagnosis (from the minidump, `%LOCALAPPDATA%\acr\Saved\Crashes\UECC-Windows-C5A38F1D...\UEMinidump.dmp`, read with cdb):
+- Verified: the faulting instruction is acr.exe RVA 0x4F64604 (`movsxd rcx, [r8+6Ch]`) in a function of the Kunos
+  physics plugin; its assert strings are `dmphysics/Source/dmkunosengine/src/ksPhysicsAC/Track.cpp` and
+  `trackData.surfaceDef != nullptr`. r8 (= surfaceDef) held 0x41023eae4e995c26, a garbage pointer (non-canonical
+  addresses are reported as 0xffffffffffffffff), not null, so the assert did not fire. The caller (RVA 0x5049B43) fills
+  trackData per track collider while building the physics track.
+- Verified: v1 added 3 physical-material imports to BakedData (PM_SurfaceMetal, PM_SurfaceGrass, PM_Fallback). The game's
+  only surface registry, DA_PhysMaterialsMappingCommon (38 DMPhysicalMaterials), lists the first two but not
+  PM_Fallback. DR2's `DEFA` material (1 triangle in nz01r5) was mapped to PM_Fallback by config/surface-map.toml.
+- Inferred (very likely, not yet confirmed in game): the collider with PM_Fallback has no Kunos surface, so surfaceDef is
+  read from an unset slot -> crash.
+- Not the cause: input contamination. The v1 host packages are byte-identical to a fresh extraction from the vanilla
+  containers alone (DT_TracksVariants, BakedData, gameplay cell, pacenote table, scriptobjects).
+
+Fix: stage-build now requires `--surface-registry` (build.ps1 exports DA_PhysMaterialsMappingCommon from the vanilla
+view) and remaps any unregistered ground material to PM_SurfaceGrass (objects: PM_WallBasic); it refuses to import an
+unregistered one, and stage-verify FAILs if any mesh or simple collider uses one. Builds also read only a vanilla view
+of the Paks (`global` + `pakchunk*-Windows`, no `~mods`; mods/common/vanilla.ps1) from a stamped cache
+`work\acr\legacy-vanilla`, and the offline check confirms the DT row Length equals the DR2 length.
+
+Fixed v1 (`work\acr\dist`): ucas 229,533,612, utoc 43,083, pak 347; PASS 30 / FAIL 0.
+Bisect set if it still crashes: `work\acr\bisect\` (A = DT only, Bfix = + BakedData, Cfix = + cell; B/C/D = the same
+with the original v1 BakedData); test order in `work\acr\bisect\TESTS.md`.

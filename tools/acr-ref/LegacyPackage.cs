@@ -19,6 +19,7 @@ internal sealed class LegacyPackage
     readonly Dictionary<string, int> _fieldPos = new();
     readonly List<int> _shiftablePos = new(), _generationsPos = new();
     readonly List<string> _names = new();
+    readonly List<int> _nameHashes = new();
     readonly List<byte[]> _imports = new();
     readonly List<byte[]> _exports = new();
     readonly List<byte[]> _exportData = new();
@@ -87,7 +88,7 @@ internal sealed class LegacyPackage
         _totalHeaderSize = Get("TotalHeaderSize");
 
         _origNameCount = Get("NameCount");
-        for (int n = 0; n < _origNameCount; n++) { _names.Add(FStr()); p += 4; }
+        for (int n = 0; n < _origNameCount; n++) { _names.Add(FStr()); _nameHashes.Add(I32()); }
         _namesEnd = p;
         _importsOffset = Get("ImportOffset");
         _origImportCount = Get("ImportCount");
@@ -154,7 +155,36 @@ internal sealed class LegacyPackage
         int i = _names.IndexOf(s);
         if (i >= 0) return i;
         _names.Add(s);
+        _nameHashes.Add(0);
         return _names.Count - 1;
+    }
+
+    int? _exportNameCount;
+
+    /// A name referenced from export data. IoStore keeps only the first NamesReferencedFromExportDataCount names for
+    /// export data (the rest are header-only), so new ones are inserted at the end of that range and the header-only
+    /// names after it move up by one (their references in the import and export maps are remapped); names added with
+    /// AddName after the range would be dropped by `retoc to-zen`.
+    public int AddExportName(string s)
+    {
+        _exportNameCount ??= BinaryPrimitives.ReadInt32LittleEndian(_header.AsSpan(_fieldPos["NamesReferencedFromExportDataCount"]));
+        int n = _exportNameCount.Value;
+        int i = _names.IndexOf(s);
+        if (i >= 0 && i < n) return i;
+        if (i >= 0) throw new NotSupportedException($"{s} is a header-only name; moving it into the export-data range is not supported");
+        if (BinaryPrimitives.ReadInt32LittleEndian(_header.AsSpan(_fieldPos["SoftObjectPathsCount"])) != 0)
+            throw new NotSupportedException("packages with soft object paths in the header are not supported");
+        _names.Insert(n, s);
+        _nameHashes.Insert(n, 0);
+        void Shift(byte[] entry, int at)
+        {
+            int v = BinaryPrimitives.ReadInt32LittleEndian(entry.AsSpan(at));
+            if (v >= n) BinaryPrimitives.WriteInt32LittleEndian(entry.AsSpan(at), v + 1);
+        }
+        foreach (var imp in _imports) { Shift(imp, 0); Shift(imp, 8); Shift(imp, 20); }
+        foreach (var exp in _exports) Shift(exp, 16);
+        _exportNameCount = n + 1;
+        return n;
     }
 
     /// Appends an import and returns its FPackageIndex (negative).
@@ -172,23 +202,23 @@ internal sealed class LegacyPackage
     public (byte[] uasset, byte[] uexp) Save()
     {
         using var nameBytes = new MemoryStream();
-        for (int n = _origNameCount; n < _names.Count; n++)
+        for (int n = 0; n < _names.Count; n++)
         {
             var s = _names[n];
             bool ascii = s.All(c => c < 128);
             var bw = new BinaryWriter(nameBytes);
             if (ascii) { bw.Write(s.Length + 1); bw.Write(Encoding.ASCII.GetBytes(s)); bw.Write((byte)0); }
             else { bw.Write(-(s.Length + 1)); bw.Write(Encoding.Unicode.GetBytes(s)); bw.Write((short)0); }
-            bw.Write(0); // name hashes (unused by the game, retoc writes 0)
+            bw.Write(_nameHashes[n]); // new names: 0 (unused by the game, retoc writes 0)
         }
-        int delta1 = (int)nameBytes.Length;
+        int delta1 = (int)nameBytes.Length - (_namesEnd - _namesOffset);
         int delta2 = (_imports.Count - _origImportCount) * ImportSize;
         int delta = delta1 + delta2;
         int newTotal = _totalHeaderSize + delta;
 
         var h = new byte[newTotal];
-        _header.AsSpan(0, _namesEnd).CopyTo(h);
-        nameBytes.ToArray().CopyTo(h, _namesEnd);
+        _header.AsSpan(0, _namesOffset).CopyTo(h);
+        nameBytes.ToArray().CopyTo(h, _namesOffset);
         int p = _namesEnd + delta1;
         foreach (var imp in _imports) { imp.CopyTo(h, p); p += ImportSize; }
         int exportsAt = p;
@@ -207,6 +237,7 @@ internal sealed class LegacyPackage
         void Set32(string f, int v) => BinaryPrimitives.WriteInt32LittleEndian(h.AsSpan(_fieldPos[f]), v);
         Set32("TotalHeaderSize", newTotal);
         Set32("NameCount", _names.Count);
+        if (_exportNameCount is { } enc) Set32("NamesReferencedFromExportDataCount", enc);
         Set32("SoftObjectPathsOffset", _namesEnd + delta1);
         Set32("ImportCount", _imports.Count);
         Set32("ImportOffset", _namesEnd + delta1);
