@@ -66,10 +66,13 @@ Per route (`route_N/`):
 | `track_spline.xml` | `TrackSplines version=2`: `CentralSplineOriginal/spline/cp` points with `pos*`, `for*` and `up*` attributes [V]. Covers the location's road network, not just this route [I] |
 | `triggers_game_object.xml` | triggers (§3.4) [V] |
 | `start_lights.xml` | start-light sequence (textures and timings) [V] |
-| `resetlines.cqtc` | [?] reset/recovery lines; quad-tree format not decoded |
+| `resetlines.cqtc` | reset/recovery data: chunk table decoded (§3.8), payload [?] |
 | `ai_track.xml`, `ai_vehicle_track.xml`, `vehicle_track_progress_data.xml` | AI racing line / progress [?] |
-| `route_objects.pssg`, `route_objecttypes.pssg`, `route_objectstextures.pssg` | route-specific object prototypes (e.g. 12 for NZ01 route 5: signs, arrows, parked vehicles) and textures [V] |
-| `objects.ens`, `ornaments.bin`, `trees.bin`, `crowd_*.bin` | [?] **object placements** (instances of the prototypes); not decoded |
+| `route_objects.pssg`, `route_objectstextures.pssg` | route-specific render prototypes (signs, arrows, parked vehicles) and textures [V] |
+| `route_objecttypes.pssg` | **object template library** (plain-text CSSGXml despite the extension): rigid bodies, collision primitives, damage states, renderable references (§3.7) [V] |
+| `objects.ens` | **object placements** (plain-text CSSGXml): template instances with world transforms (§3.7) [V] |
+| `ornaments.bin`, `trees.bin`, `crowd_*.bin` | [?] binary render-only instance lists (small props, distant trees, spectators); not decoded |
+| `route_patchup_ot.pssg` | binary PSSG render patch-up data [?] |
 | `drivable_entities.jpk`, `grids.pssg`, `track.vis`, `replay_camera_config.xml`, `pfx*.xml`, `light_*` | [?] |
 
 ## 3. Text/XML data
@@ -108,7 +111,7 @@ converts them to text.
 - `track_bounds` holds unreliable values (max = 0, 613, 0 for NZ01 route 5) and is ignored.
 - Every rally route has `direction="forwards"`.
 
-### 3.3 Codriver / pacenotes [V structure, ? semantics]
+### 3.3 Codriver calls / pacenotes [V structure; semantics V/I per field below]
 
 ```xml
 <root>
@@ -120,12 +123,64 @@ converts them to text.
     </call> ...
 ```
 
-- Each call is one pre-recorded phrase (`audioName` in the codriver soundbank) triggered at `distanceAlongTrack`.
-  `name` is an authoring comment.
-- Not yet decoded:
-  - The subcall fields describing the note (corner type, angle/severity, modifiers, links).
-  - Whether `distanceAlongTrack` uses the gate-distance origin or the start line. The first call is at 0.1 while the
-    start gate is at 40.5 m.
+Each call is one pre-recorded phrase (`audioName` in the codriver soundbank) triggered at `distanceAlongTrack`.
+`name` is an authoring comment. The 3 subcalls are the structured content of the phrase in spoken order (the HUD
+icons); empty slots have `type="0"`. 30 of 156 files come from the `game_2*.dat` patch layers.
+
+**How it was decoded.**
+- **Field statistics.** `dr2-extract pacenote-survey` writes `work/dr2/pacenote-survey.md`: field histograms over
+  all 156 files, plus the geometry checks below.
+- **Two human transcriptions.** These are of the English codriver audio, from
+  [maxbechtold/dirt-rally-pace-notes](https://github.com/maxbechtold/dirt-rally-pace-notes), and were aligned
+  call by call with the data:
+  - `argentina_rally_01_route_4` "La Merced": 24 calls;
+  - `spain_rally_02_route_3` "Viñedos Dardenyà": about 40 calls.
+- **Geometry.** The route's signed curvature from the gate polyline.
+
+| field | meaning | status |
+|---|---|---|
+| `distanceAlongTrack` | metres **from the start line** (start split gate), not on the `gates[].distance` scale | [V] see below |
+| `type` 0 | empty slot | [V] |
+| `type` 1 / 2 | corner **left / right** | [V] transcriptions (every corner in both stages); geometry (below) |
+| `type` 3 | distance call; the distance is in `distanceLink` | [V] |
+| `type` 6 | "finish" | [V] both transcriptions |
+| `type` 5, 7, 8, 9 | other call kinds (205 / 210 / 12 / 1005 subcalls in total); 9 may be "jump"/"crest" from one transcription match | [?] |
+| `angle` (corners) | severity. DR2 scale: 6 = fastest ... 1, then square and hairpin; see the table below | [V] for 15, 25, 30, 40, 50, 60, 65, 70, 80, 140, 150; [I] for 90 and 100-130 |
+| `distanceLink` on type 3 | spoken distance code: 60→20, 61→30, 15→50, 3→60, 16→70, 4→80, 5→100, 19→120, 6→150 | [V] for those 9; other codes (7-9, 14, 17, 18, 20-32) [?] |
+| `distanceLink` on corners | either one of the distance codes ("... 100") or a link code: 1, 2, 12, 13, 51 (12 co-occurs with "long ... tightens" and "into", 13 with "long"/"opens") | [V] distances, [?] link codes |
+| `modifierA` | 3 = "don't cut"; 1 = possibly "caution" (one match) | [V] 3, [?] others |
+| `modifierB` | 1, 2, 3, 30 seen | [?] |
+| `delay` | ms, 0 on most first subcalls and > 0 on later ones; the timing of the subcall within the phrase | [I] |
+| `canConcatModA/B` | almost always True | [?] |
+| `shakedown_info` | `cutoffDistance` = last call played in shakedown mode; `finishCallDistance` = where the shakedown "finish" is called. Both from the start line, on average 80 m before the `shake_finish` gate | [V] same origin test |
+
+Severity from `angle`. The median radius of the curvature peak shrinks monotonically with the angle:
+
+| angle | 14-16 | 20-30 | 40-45 | 50-55 | 60-70 | 75-85 | 86-95 | 96-165 |
+|---|---|---|---|---|---|---|---|---|
+| severity | 6 | 5 | 4 | 3 | 2 | 1 | square [I] | hairpin (140-160 [V], 100-130 [I]) |
+| median peak radius (m) | 44 | 42-45 | 41 | 39 | 23-32 | 21 | 15 | 17-26 |
+
+**Distance origin [V].**
+- **Correlation.** Across the 153 stages with a finish call, compute (finish gate distance − finish-call
+  distance). That residual correlates 0.89 with the stage's start-gate distance, with slope 1.01. This is exactly
+  what happens if calls are measured from the start line.
+- **Spread.** Measured from the start line, the finish call is 164 ± 71 m before the finish; on the gate scale it
+  would be 271 ± 152 m.
+- **Shakedown.** The shakedown finish call is 80 ± 32 m before the `shake_finish` gate when measured from the start
+  line, against 203 ± 192 m on the gate scale.
+- **Example.** `spain_rally_01_route_1` has its start gate at 1490 m. On the gate scale its calls would end 1.6 km
+  before the finish.
+
+**Left/right against geometry [V].**
+- **Method.** Take corners with angle ≥ 65 whose first subcall is the corner, with the call position measured from
+  the start line. Then compute the net heading change 50-125 m after the call.
+- **Result.** Type 1 turns towards `cross(+Y, f)` (the driver's left in a right-handed frame) in 197 of 201 cases.
+  Type 2 turns towards `cross(f, +Y)` in 233 of 246 cases.
+- **Lead distance.** The 50-150 m window separates best, so a note is read roughly 50-150 m before its corner.
+  Closer windows catch the previous corner, which has the opposite sign on alternating corners.
+
+stage.json gets a normalized form (`pacenotes.tokens`) next to the raw data; see docs/stage-ir.md.
 
 ### 3.4 triggers_game_object.xml [V]
 
@@ -155,6 +210,112 @@ Key → string table, read with EgoEngineLibrary `LngFile`. Useful keys:
 - `lng_location_full_<key>`: location name. `<key>` is the location minus `_rally_NN`, except `usa` uses
   `new_england` and `scotland` uses `scotland_gravel`.
 
+### 3.7 Objects: `objects.ens`, `route_objecttypes.pssg`, `physparams.xml` [V unless noted]
+
+Both route files are **plain-text XML** (`<PSSGFILE version="0.4.0.0beta"><PSSGDATABASE creator="CSSGXml">`)
+despite the `.pssg`/`.ens` extensions. EgoEngineLibrary's `PssgFile` misreads them, so they are read with
+`XmlDocument`.
+
+**`route_N/objects.ens`: placements.** NZ01 route 5 has 20,130 basic + 2,895 entity instances of 117 templates,
+plus 131 cloth instances.
+
+```xml
+<TEMPLATEBASICENTITYINSTANCE id="..." uri="route_objecttypes.pssg#pohutukawa_01_a" instance_tag="..." layer_mask="...">
+  <TEMPLATETRANSFORM>m11 m12 m13 m14 ... m41 m42 m43 1</TEMPLATETRANSFORM>     <!-- row-major, translation in the last row -->
+</TEMPLATEBASICENTITYINSTANCE>
+<TEMPLATEENTITYINSTANCE id instanceID uri instance_tag layer_mask ao_map_pos ao_map_id> <TEMPLATETRANSFORM>...</TEMPLATEENTITYINSTANCE>
+<TEMPLATECLOTHINSTANCE uri="...#polecable|poletape"> + <TEMPLATECLOTHATTACHINSTANCE instance="#id" name="leftA|rightA"/>
+```
+
+- The transform is a world transform in the stage frame, in System.Numerics row-vector convention.
+- The origin is at the object's base: instance origins are a median 0.21 m from the physics ground on NZ01 route 5.
+- Cloth instances are power-line cables and tape strung between two instances. Their geometry comes from
+  `cloth2.xml` [I]; they are not exported.
+
+**`route_N/route_objecttypes.pssg`: templates.** The structure, using the wire-fence template as the example:
+
+```xml
+<TEMPLATEENTITYREFERENCE id="core_barr_fence_wire_mid_b" uri="#core_barr_fence_wire_mid_b.max" allocAlt="5"/>
+<TEMPLATEENTITY id="core_barr_fence_wire_mid_b.max">
+  <TEMPLATESUBENTITY id="..._obj_001_subent">
+    <TEMPLATERIGIDBODY id="..." infMass="1" props="physparams.xml#rbDefault">      <!-- infMass 1 = static, 0 = dynamic -->
+      <TEMPLATERIGIDBODYSHAPE uri="#..._col_001_shape">
+        <TEMPLATETRANSFORM>...</TEMPLATETRANSFORM>                                 <!-- shape transform in template space -->
+        <TEMPLATEBEHAVIOUR impulse="physparams.xml#bLightest" typeuri="#..._damage_behaviour"/>  <!-- breaks on impulse -->
+      </TEMPLATERIGIDBODYSHAPE>
+    </TEMPLATERIGIDBODY>
+    <TEMPLATETRANSFORMABLE uri="#..._default_001_renderable" sid="..._obj_001"/>
+  </TEMPLATESUBENTITY>
+  <TEMPLATESUBENTITY id="..._post1_obj_subent"> ... damage-state piece ... </TEMPLATESUBENTITY>
+  <TEMPLATECONSTRAINT body1uri="#..._post1_obj_rigidbody" body2uri="world" props="physparams.xml#cLightPostBase"/>
+  <TEMPLATEBEHAVIOUR id="initial!33" typeuri="#..._default_001_behaviour"/>
+</TEMPLATEENTITY>
+<TEMPLATEBEHAVIOURTYPE id="..._default_001_behaviour">
+  <TEMPLATECOMPONENTCHANGE componenturi="#..._obj_001_subent" operation="add"/>
+  <TEMPLATECOMPONENTCHANGE componenturi="#..._post1_obj_subent" operation="delete"/> ...
+</TEMPLATEBEHAVIOURTYPE>
+<TEMPLATESHAPEBOX id="..." width height length shell props="physparams.xml#sMetalHollowSmall"/>
+<TEMPLATESHAPECYLINDER height radius shell props/>  <TEMPLATESHAPECONE baseRadius fullHeight shell props/>
+<TEMPLATESHAPESPHERE radius shell props/>  <TEMPLATESHAPEVCQUADTREE filename="xxx.vcqtc"/>
+<TEMPLATERENDERABLE id="..._default_001_renderable" uri="objects.pssg#default!6"/>
+```
+
+- **Initial state.** The entity's `initial*` behaviour lists which sub-entities exist at load: the intact object is
+  added and the damage pieces deleted. Impacts above a shape's `impulse` class switch to the damage behaviour.
+- **Renderables.** These point into location `objects.pssg`, location `trees.pssg` or route `route_objects.pssg`
+  (NZ01 route 5: 107 / 34 / 21). The node named is inside a `<name> Root` ROOTNODE at the origin.
+  - In `objects.pssg` that node holds the mesh.
+  - In `trees.pssg` it is the rigid-body node, and the mesh is its `lod` sibling.
+- **Primitive conventions**, checked by comparing each template's collision bounds with its render prototype's
+  bounds (stage.json `validation.object_shapes_vs_render`):
+  - **Box [V]:** `width`/`height`/`length` are full extents along local x/y/z, centred. Median IoU is 0.72 over 61
+    templates, against 0.08 with width and length swapped.
+  - **Cylinder [V]:** axis local y, centred. Median IoU 0.70 over 14 non-vegetation templates, against 0.33 when
+    based at the origin.
+  - **Cone [I]:** axis local +y pointing at the apex, origin at the centroid (`fullHeight/4` above the base). The
+    traffic cone gives IoU 0.75, against 0.67 with the origin at the base and 0.51 at the apex. Tree canopies are
+    inverted cones (local y rotated to point down), e.g. pohutukawa from 1.5 m to 7.9 m.
+  - **Sphere [V]:** centred. Vegetation volumes are deliberately smaller than the foliage, so bounds IoU is low for
+    trees and bushes.
+  - **`shell`:** 0.02 everywhere, a collision margin [I].
+- **Shape kinds in NZ01 route 5:** 243 box, 65 cylinder, 7 cone, 15 sphere, 3 vcquadtree (drivable tarp/podium).
+
+**`tracks/generic/physparams.xml` (game.dat): shape classes.** It defines 56 `TEMPLATESHAPEPROPS id material
+massSource [bodyOverride] [corematerial]`. Examples:
+
+| class | material |
+|---|---|
+| `sArmco` | METS |
+| `sConcrete` | CONC |
+| `sSolidTreeLeafy` | TREL |
+| `sSoftVegetation` | VEGS (core BSHS) |
+| `sStone` | ROCK |
+| `sWoodHollowSmall` | WODH |
+| `sMetalHollowSmall` | METH |
+| `sPlastic` | PLAS |
+| `sHaybail` | HAYB |
+| `sDeformableTyreWall` | DTYR |
+| `sSpawnable*` | SPWN |
+
+- It also defines rigid-body, constraint and behaviour (break-impulse) props.
+- The class is a physics class (mass, hollow/solid) rather than an object type. For example, wire-fence spans use
+  `sMetalHollowSmall`.
+- `config/surface-map.toml` `[walls]` maps all 56 classes to ACR `PM_Wall*` materials, and `[wall_templates]`
+  refines by template prefix (fences → `PM_WallWoodFence`).
+
+### 3.8 resetlines.cqtc [V header, ? payload]
+
+A small chunked container (NZ01 route 5: 210,657 bytes). Header:
+- `int32 3` (version?), then `int32 count`;
+- then `count` × `{ int64 offset, int64 size, char[4] tag, 8 zero bytes }`.
+
+Tags are `REST`, `CRES`, `SCRS`, `CRES`, `CRES`. The `REST` chunk starts with float3 min/max bounds of the route
+area, followed by packed (apparently 16-bit-quantised) quad-tree data that is not decoded. stage.json
+`respawn.resetlines` records the chunk table and bounds; respawn uses the gates instead.
+
+The NeFS entry for `scotland_rally_04_route_2`'s file uses a compression method our reader does not support; that is
+the only unreadable file found in the batch over all 156 stages.
+
 ## 4. Physics ground: `route_N/track.jpk` [V]
 
 A JPK archive (EgoEngineLibrary `JpkFile`) holding `qt.info` (overall bounds) plus one `qt_*.vcqtc` entry per
@@ -179,8 +340,8 @@ trianglesOffset: numTriangles x 4 bytes
 - **Contents:** one continuous surface covering road, verges, banks and terrain.
   - NZ01: 2,141,369 triangles. The `qt.info` bounds are (-5547.7, 422.8, -4554.5) .. (-2921.1, 630.7, 1881.2).
   - Materials over the whole ground: GR3+ 849,631; GD0+ 659,045; DB3+ 632,470; CATG 222; DEFA 1.
-- **Not in track.jpk:** objects (trees, fences, rocks, buildings). Their collision is presumably in the object
-  placements and prototypes (`objects.ens`, `*.bin`, `drivable_entities.jpk`), which are not decoded.
+- **Not in track.jpk:** objects (trees, fences, rocks, buildings). Their collision is primitives on the object
+  templates (§3.7).
 - **Winding:** 97% of triangles are counter-clockwise seen from +Y. The rest are steep banks and the like.
 - **`flags`:** [?] a 3-bit per-triangle value; NZ01 route 5 has 96% of triangles at 7.
 - **Commands:** `dr2-extract track-to-gltf <track.jpk> out.glb` gives one primitive per surface code.
@@ -219,12 +380,22 @@ PSSG scenes are read with EgoEngineLibrary (`PssgFile`); `dr2-extract pssg-info`
 Texture bodies are in the same file, `patchup_ot.pssg`, `objectstextures.pssg` or the route `*textures.pssg`; a
 reference reads `file.pssg#id` or `#id`. `PssgTexture.ToDdsFile()` writes them out as DDS.
 
-**Object prototypes** (`objects.pssg`, `route_objects.pssg`) are `ROOTNODE`s at the origin, e.g.
-`core_game_rcsign_h Root` > `LODVISIBLERENDERNODE` > `LODRENDERINSTANCES`. The placements live elsewhere (§2,
-not decoded), so prototypes export at the origin.
+**Object prototypes** (`objects.pssg`, `trees.pssg`, `route_objects.pssg`) are `ROOTNODE`s at the origin, e.g.
+`nz_building_04 Root`, which holds:
+- `LODVISIBLERENDERNODE lod!16`;
+- `NODE default!6` > `NODE rigidbody!6` > `RENDERNODE nz_building_04_physics`.
 
-The stage-map textures (`*.tpk` in `game.dat`) use TPK texture format 38, which EgoEngineLibrary does not support
-(`tpk-to-png` fails on them).
+Templates reference the `default!N` node (§3.7). `stage-ir --render` exports one prototype per used template to
+`render/objects.glb` (`PssgMeshExport.ExportPrototypes`).
+
+**Stage-map textures** are in `game.dat`:
+- `frontend/streamed_textures/splines/<stage>_sa.tpk`: stage-select route line, 368×176;
+- `frontend/streamed_textures/loading/<stage>_spline.tpk`: loading screen.
+
+They use a newer tpk header (first word `0x66`, format id at `0x28` = 38, width/height at `0x2C`/`0x30`, payload
+length at `0x38`, payload = the last `length` bytes). **Format 38 is BC7**: the route line is in alpha, with
+start/finish icons. `RouteMapCheck.cs` decodes it with BCnEncoder. EgoEngineLibrary's `TpkFile` does not support
+it; `tpk-to-png` has an experimental fallback (`DR2_TPK38=Bc7 DR2_TPK38_CH=a`).
 
 ## 6. Coordinate system
 
@@ -233,14 +404,24 @@ The stage-map textures (`*.tpk` in `game.dat`) use TPK texture format 38, which 
   - Physics-ground height at the 446 gate crossings of NZ01 route 5 matches the gate Y within 4.4 cm (mean 8 mm).
   - The render-terrain and physics bounds agree to 1 mm at the shared edge.
 - **No conversion:** EgoEngineLibrary's converters apply no axis conversion, and neither do we.
-- **Handedness:** right-handed is the working assumption [I], based on the gate labels.
-  - For travel direction `f`, `normalize(cross(f, +Y))` points at the gate's `right` point on all 853 interior
-    gates of NZ01 route 5 and Wales01 route 2.
-  - That is the driver's right only in a right-handed reading. A left-handed reading would put the game's "right"
-    label on the driver's left.
-  - Render winding agrees with the stored normals 99.98% of the time. That doesn't distinguish right-handed with
-    counter-clockwise front faces from left-handed with clockwise.
-  - Not yet checked against a real-world map; see the open questions in §9.
+- **Handedness: right-handed [V]**, verified by three independent checks.
+  1. **Route map (objective, what players see).** For each stage, the start-to-finish gate polyline seen from +Y,
+     with world X → image right and world Z → image down, is fitted to the route pixels of the stage-select map
+     (§5). The fit searches all rotations (1° steps) with uniform scale, with and without a mirror.
+     - Result: 154 of 156 stages fit better unmirrored, typically by a factor of 2-8 in mean pixel distance.
+     - The two exceptions fit badly either way: `greece_rally_01_route_5` (cost ratio 0.7) and
+       `france_rally_02_route_3` (0.9).
+     - Run `dr2-extract route-map-check` for the full list; stage.json carries `validation.route_map_fit`.
+  2. **Codriver audio.** Human transcriptions of "left"/"right" calls (§3.3) match the curvature sign of the road
+     under a right-handed reading in 430 of 447 sharp corners (96%).
+  3. **Gate labels.** For travel direction `f`, `normalize(cross(f, +Y))` points at the gate's `right` point on all
+     853 interior gates of NZ01 route 5 and Wales01 route 2.
+
+  Render winding agrees with the stored normals 99.98% of the time, and collision is 97% counter-clockwise from
+  above. With the handedness established, front faces are counter-clockwise, as in glTF.
+
+  No real-world map overlay was done. The route maps are what DR2 shows players next to the stage they drive, so a
+  mirrored world would contradict them.
 
 ## 7. Tool commands
 
@@ -252,6 +433,9 @@ dr2-extract track-to-gltf|track-info|ground-height <track.jpk> ...
 dr2-extract pssg-info|pssg-to-gltf <file.pssg> ...
 dr2-extract catalog                               all rally stages + surface survey (work/dr2/catalog.{json,md})
 dr2-extract stage-ir <stage_id> [--render]        stage IR (docs/stage-ir.md)
+dr2-extract stage-ir --all [--render]             every stage + work/ir/report.md
+dr2-extract pacenote-survey                       codriver field statistics + geometry checks (work/dr2/pacenote-survey.md)
+dr2-extract route-map-check                       handedness fit of every stage against its route map
 ```
 
 ## 8. Catalogue of rally stages [V]
@@ -434,17 +618,22 @@ is commented with its DR2 mechanics class. By mechanics class:
 
 ## 9. Open questions
 
-- **Handedness:** right-handed is assumed (§6). The open check is whether the stages are mirrored relative to the
-  real places. Overlay a stage on a map, e.g. NZ coastline or Ocean Beach, or decode a stage map texture (tpk
-  format 38).
-- **Object placements and object collision:** `objects.ens`, `ornaments.bin`, `trees.bin` and
-  `drivable_entities.jpk` are not decoded, so the IR has no trees, fences, signs or buildings, and no wall
-  collision.
-- **Pacenote semantics:** subcall `type`/`angle`/`modifier*`, and the origin of `distanceAlongTrack`.
+- **Render-only instance lists:** `trees.bin`, `ornaments.bin` and `crowd_*.bin` (binary).
+  - They probably add non-colliding scenery: distant trees, small props, spectators.
+  - All colliding objects come from `objects.ens`.
+  - Cloth (cables, tape) is not exported.
+  - `drivable_entities.jpk` (vcqtc meshes) is referenced by name only.
+- **Pacenotes, remaining:**
+  - Call types 5/7/8/9.
+  - Link codes 1/2/12/13/51.
+  - `modifierB`, and `modifierA` values other than 3.
+  - Distance codes outside the verified 9.
+  - The exact `delay` semantics.
+- **Cone origin:** centroid convention confirmed on one template only.
 - **Terrain materials:** how `terrain_array.fx` blends its texture arrays. Vertex colour and the packed ST stream
   are exported or ignored but not interpreted.
 - **Smaller unknowns:**
-  - `resetlines.cqtc` (reset positions) and AI line files are not decoded.
+  - The `resetlines.cqtc` payload and the AI line files.
   - The `flags` field in the ground triangles.
   - `landscape.heightfield`.
 - **Patch-layer order:** `game_2_1.dat` and `game_2.dat` are placed above the location archives, but the engine's
