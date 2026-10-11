@@ -1,0 +1,7 @@
+# extracted game data, build tools and packed mods (never commit game assets)
+work/
+# third-party clones
+third_party/
+# .NET build output
+bin/
+obj/
