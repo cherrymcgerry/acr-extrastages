@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Additive stage registration (docs/additive-plan.md). Separate from acr-ref so its builds never break the stage
+       override pipeline; shares acr-ref's byte-exact legacy package reader/writer by linking the source. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>acr-additive</AssemblyName>
+    <RootNamespace>AcrAdditive</RootNamespace>
+    <RollForward>Major</RollForward>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\acr-ref\LegacyPackage.cs" Link="Shared\LegacyPackage.cs" />
+    <Compile Include="..\acr-ref\Unv.cs" Link="Shared\Unv.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="CUE4Parse" Version="1.2.2.202610" />
+    <PackageReference Include="Microsoft.Bcl.Memory" Version="10.0.12" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+  </ItemGroup>
+</Project>
