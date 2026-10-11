@@ -44,6 +44,7 @@ internal static class Program
                 "ground-at" => HeightSurvey.GroundAt(opts),
                 "procmesh-probe" => ProcMesh.Probe(opts),
                 "export-info" => ExportInfo(opts),
+                "scenery-survey" => Scenery.Survey(opts),
                 _ => Fail($"unknown command '{args[0]}'"),
             };
         }

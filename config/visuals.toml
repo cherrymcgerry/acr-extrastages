@@ -58,3 +58,11 @@ rock = "/Game/Data/Gameplay/PhysicalMaterials/MI_WallRock"
 plastic = "/Game/Data/Gameplay/PhysicalMaterials/MI_WallPlastic"
 other = "/Game/Data/Gameplay/PhysicalMaterials/MI_WallBasic"
 soft = "/Game/Data/Gameplay/PhysicalMaterials/MI_WallBush"
+
+[vista]
+# only with stage-build --visuals-vista 1 (build.ps1 v1.6+): DR2's distant vista ring (render/vista.glb, the NONLOD_i_j
+# meshes, ~10 km), drawn once the Hafren scenery is hidden so the horizon is not empty
+material = ""                   # engine default, like the terrain
+exclude_cell_m = 100            # vista triangles over a grid cell touched by the drawn ground are dropped
+min_distance_m = 50             # offline check: nearest vista vertex to the DR2 centreline (plan; DR2's own ring
+                                #   comes to ~83 m on nz01r5)

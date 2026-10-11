@@ -1,0 +1,18 @@
+# v1.6: Hafren South's own scenery hidden for the forward variant (acr-ref stage-build --scenery; Scenery.cs).
+# Data layers of WalesS4HafrenSouth (WorldDataLayers): BE01 forward gameplay, E8A3 forward rally props,
+# B42F reverse gameplay, C2CD reverse rally props. The forward variant activates BE01 + E8A3 (GameConfigurator).
+
+[cells]
+# Streaming cells left as they are. Every other cell keeps only its reverse layers, or gets hidden_layer if it has
+# none, so it never streams in the forward variant (75 terrain/foliage/PCG cells without a layer, the forward
+# rally props, and the forward gameplay cells holding Hafren's crowd, marshals, TV cameras and physics props).
+keep = ["22VG0QIP9ATUQI633K86KWPFP"]   # forward gameplay: splines, triggers, start, respawn walls, pacenote setup
+reverse_layers = ["DataLayer_B42F85194792839167406C971316902E", "DataLayer_C2CDF8EA4FD154BD45E63F93ACB7BD69"]
+hidden_layer = "DataLayer_C2CDF8EA4FD154BD45E63F93ACB7BD69"
+
+[persistent]
+# Always-loaded actors of the persistent level whose components are set invisible. Kept: sky, weather, lights,
+# reflection captures, audio, managers, and the service park (~3 km east of the route, X 3.2 km, Y 1.2 km).
+hide_actor_classes = ["WorldPartitionHLOD", "BP_TreelinesContainer_C", "BC_MyhTurbineA_C"]
+# actors any of whose components reference a mesh matching one of these
+hide_meshes = ["^SM_WalesS4HafrenSouthTerrain", "^SM_S4HafrensSouthBG", "^SM_(Spruce|Larch|Beech)", "^SM_Treeline"]

@@ -20,14 +20,17 @@ internal static class Visuals
     ///             to its root, so actor-level hiding of the trigger does not apply either
     ///   vegetation: none (no non-solid geometry) | crowns (small tree crowns, see VisualObjects)
     ///   canopies: overrides [objects] canopies (clip | full | none)
-    internal sealed record Options(string Host, bool Retarget, string? Owner, string Vegetation = "none", string? Canopies = null)
+    ///   vista: adds DR2's distant vista ring (render/vista.glb, see [vista]) as a last section
+    internal sealed record Options(string Host, bool Retarget, string? Owner, string Vegetation = "none", string? Canopies = null,
+                                   bool Vista = false)
     {
         public static Options From(IReadOnlyDictionary<string, string> named) => new(
             named.GetValueOrDefault("visuals-host", "start"),
             named.GetValueOrDefault("visuals-retarget", "1") != "0",
             named.GetValueOrDefault("visuals-owner") is { Length: > 0 } ow ? ow : null,
             named.GetValueOrDefault("visuals-vegetation", "none"),
-            named.GetValueOrDefault("visuals-canopies") is { Length: > 0 } cn ? cn : null);
+            named.GetValueOrDefault("visuals-canopies") is { Length: > 0 } cn ? cn : null,
+            named.GetValueOrDefault("visuals-vista", "0") != "0");
     }
 
     // by name: a round trip without the Blueprint containers cannot resolve the class imports
@@ -148,6 +151,12 @@ internal static class Visuals
                 sections.Add(objSecs[cls]); mats.Add(Mat("object_materials", cls)); sectionNames.Add($"objects:{cls}");
             }
             r["objects"] = objRep;
+        }
+        if (opt.Vista)
+        {
+            var (vista, vr) = BuildVista(ir, pl, cfg, terrain, road);
+            sections.Add(vista); mats.Add(Mat("vista", "material")); sectionNames.Add("vista");
+            r["vista"] = vr;
         }
         r["sections"] = sectionNames;
         r["triangles_total"] = sections.Sum(s => s.Idx.Count / 3);
@@ -310,6 +319,14 @@ internal static class Visuals
             }
         }
         else if (probe is not null) C(false, "visuals road corridor: section names missing from the report");
+        if (opt.Vista)
+        {
+            var vr = visualsReport?["vista"];
+            double near = vr?["nearest_to_centreline_m"]?.GetValue<double>() ?? 0, min = cfg.Num("vista", "min_distance_m");
+            int vt = vr?["triangles"]?.GetValue<int>() ?? 0;
+            C(vr is not null && secs[^1].Idx.Count / 3 == vt && near >= min,
+              $"visuals: vista section last, {vt} triangles, nearest vertex {near} m from the centreline (min {min} m)");
+        }
 
         // posts: 20 vertices each, centred on a gate edge point
         double spacing = cfg.Num("markers", "spacing_m");
@@ -339,6 +356,64 @@ internal static class Visuals
         C(cl.All(q => q.X >= mn.X && q.X <= mx.X && q.Y >= mn.Y && q.Y <= mx.Y) && secs[2].Idx.Count > 0,
           $"visuals: ground mesh {ground.Count} vertices covers all {cl.Count} centreline points; road section {secs[2].Idx.Count / 3} triangles");
         return failures;
+    }
+
+    /// DR2's distant vista ring in world space. Triangles over a [vista] exclude_cell_m grid cell that the drawn ground
+    /// touches are dropped: the ring also runs under the playable area, where it would show through the ground.
+    static (ProcMesh.Section, JsonObject) BuildVista(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ProcMesh.Section terrain, ProcMesh.Section road)
+    {
+        double cellSize = cfg.Num("vista", "exclude_cell_m") * 100;
+        (long, long) Key(float x, float y) => ((long)Math.Floor(x / cellSize), (long)Math.Floor(y / cellSize));
+        var ground = new HashSet<(long, long)>();
+        foreach (var s in new[] { terrain, road })
+            for (int t = 0; t + 2 < s.Idx.Count; t += 3)
+                foreach (var k in new[] { 0, 1, 2 }) { var v = s.Pos[(int)s.Idx[t + k]]; ground.Add(Key(v.X, v.Y)); }
+
+        var vista = new ProcMesh.Section();
+        int dropped = 0, source = 0;
+        foreach (var prim in new Glb(Path.Combine(ir.Dir, "render", "vista.glb")).Primitives())
+        {
+            int nv = prim.Positions.Length / 3;
+            var ue = new Vector3[nv];
+            for (int v = 0; v < nv; v++)
+            {
+                var p = pl.ToPhysics(prim.Positions[v * 3], prim.Positions[v * 3 + 1], prim.Positions[v * 3 + 2]);
+                ue[v] = new((float)(p.X * 100), (float)(p.Z * 100), (float)(p.Y * 100));
+            }
+            var map = new int[nv]; Array.Fill(map, -1);
+            int Add(uint v)
+            {
+                if (map[v] >= 0) return map[v];
+                map[v] = vista.Pos.Count;
+                vista.Pos.Add(ue[v]); vista.Nrm.Add(Vector3.Zero); vista.Uv.Add(new Vector2(ue[v].X / 400, ue[v].Y / 400));
+                return map[v];
+            }
+            for (int t = 0; t + 2 < prim.Indices.Length; t += 3)
+            {
+                source++;
+                uint a = prim.Indices[t], b = prim.Indices[t + 1], c = prim.Indices[t + 2];
+                var g = (ue[a] + ue[b] + ue[c]) / 3;
+                if (ground.Contains(Key(g.X, g.Y))) { dropped++; continue; }
+                AddTri(vista, Add(a), Add(b), Add(c));
+            }
+        }
+        for (int i = 0; i < vista.Nrm.Count; i++) vista.Nrm[i] = vista.Nrm[i] == Vector3.Zero ? Vector3.UnitZ : Vector3.Normalize(vista.Nrm[i]);
+
+        var cl = ir.Centre.Select(pl.ToUe).Select(q => new Vector2((float)q.X, (float)q.Y)).ToArray();
+        double nearest = double.MaxValue;
+        foreach (var v in vista.Pos) foreach (var q in cl) nearest = Math.Min(nearest, (new Vector2(v.X, v.Y) - q).LengthSquared());
+        var (mn, mx) = ProcMesh.Bounds(vista.Pos);
+        var r = new JsonObject
+        {
+            ["source_triangles"] = source,
+            ["triangles"] = vista.Idx.Count / 3,
+            ["dropped_under_ground"] = dropped,
+            ["nearest_to_centreline_m"] = Math.Round(Math.Sqrt(nearest) / 100, 1),
+            ["bounds_m"] = $"({mn.X / 100:0},{mn.Y / 100:0},{mn.Z / 100:0})..({mx.X / 100:0},{mx.Y / 100:0},{mx.Z / 100:0})",
+        };
+        Console.WriteLine($"visuals: vista {r["triangles"]} of {source} triangles ({dropped} under the drawn ground dropped), " +
+                          $"nearest vertex {r["nearest_to_centreline_m"]} m from the centreline, bounds {r["bounds_m"]}");
+        return (vista, r);
     }
 
     /// Adds a triangle facing up (UE front face: cross(b - a, c - a) points against the normal) and accumulates normals.

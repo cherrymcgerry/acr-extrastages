@@ -30,6 +30,11 @@
                            pacenote assignment and full canopy cones)
                     v1.5 = v1.4 with DR2 calls aligned to their own corners (v1.4 put calls 2-20 one corner late) and
                            tree canopy cones drawn only up to car height; colliders unchanged (-> work\acr\dist-v1.5)
+                    v1.6 = v1.5 without Hafren South's scenery (config/scenery.toml: its streaming cells moved to
+                           reverse-only data layers, HLODs / terrain / background / treelines in the persistent level
+                           set invisible), DR2's distant vista ring drawn in the terrain material ([vista] in
+                           config/visuals.toml) and named "Te Awanga Sprint Reverse" (config/track-names.toml)
+                           (-> work\acr\dist-v1.6)
                     v2 = + object collision, pacenotes, respawn walls re-laid (default)
 .PARAMETER Vegetation  v1.4+: none (default) | crowns (small tree crowns high up, clear of the road)
 .PARAMETER GroundOffset  metres added to the DR2 placement height (default -47 for v1.1+, 0 otherwise)
@@ -47,7 +52,7 @@
 param(
     [string]$Stage = 'new_zealand_rally_01_route_5',
     [string]$Short = 'nz01r5',
-    [ValidateSet('v1', 'v1.1', 'v1.2', 'v1.3', 'v1.4', 'v1.5', 'v2')][string]$Version = 'v2',
+    [ValidateSet('v1', 'v1.1', 'v1.2', 'v1.3', 'v1.4', 'v1.5', 'v1.6', 'v2')][string]$Version = 'v2',
     [ValidateSet('none', 'crowns')][string]$Vegetation = 'none',
     [double]$GroundOffset = [double]::NaN,
     [switch]$NoVisuals,
@@ -82,17 +87,22 @@ function Run([string]$exe) {
 }
 
 $host_ = @{
-    baked    = 'acr\Content\Environments\WalesS4HafrenSouth\DataAssets\DA_WalesS4HafrenSouthBakedData'
-    cell     = 'acr\Content\Levels\WalesS4HafrenSouth\_Generated_\22VG0QIP9ATUQI633K86KWPFP'
-    variants = 'acr\Content\Data\Database\Main\TrackSelection\DT_TracksVariants'
-    pacenote = 'acr\Content\Data\Pacenote\Tables\DT_PacenoteHafrenSouthForward'
+    baked      = 'acr\Content\Environments\WalesS4HafrenSouth\DataAssets\DA_WalesS4HafrenSouthBakedData'
+    cell       = 'acr\Content\Levels\WalesS4HafrenSouth\_Generated_\22VG0QIP9ATUQI633K86KWPFP'
+    variants   = 'acr\Content\Data\Database\Main\TrackSelection\DT_TracksVariants'
+    pacenote   = 'acr\Content\Data\Pacenote\Tables\DT_PacenoteHafrenSouthForward'
+    persistent = 'acr\Content\Levels\WalesS4HafrenSouth'                          # v1.6: scenery cells and actors
+    strings    = 'acr\Content\Data\Localization\ContentTexts\ST_Track'            # v1.6: menu / HUD names
 }
+# retoc filters on the file name; the persistent level's bare name would also match all of its cells
+$filter = @{ persistent = 'WalesS4HafrenSouth.umap' }
 $legacy = Join-Path $work 'legacy-vanilla'
 if (-not (Test-VanillaStamp $legacy)) { Remove-Item -Recurse -Force $legacy -ErrorAction SilentlyContinue }
-foreach ($rel in $host_.Values) {
+foreach ($k in $host_.Keys) {
+    $rel = $host_[$k]
     if (-not (Test-Path (Join-Path $legacy "$rel.uexp"))) {
         Assert-VanillaPaks $paks
-        Run $Retoc to-legacy --version UE5_6 --no-shaders --filter (Split-Path $rel -Leaf) $paks $legacy
+        Run $Retoc to-legacy --version UE5_6 --no-shaders --filter $(if ($filter[$k]) { $filter[$k] } else { Split-Path $rel -Leaf }) $paks $legacy
     }
 }
 Write-VanillaStamp $legacy $paks
@@ -119,23 +129,27 @@ if ($Version -ne 'v1' -and (Resolve-Path -LiteralPath $dist -ErrorAction Silentl
 Remove-Item -Recurse -Force $mod -ErrorAction SilentlyContinue
 $sbArgs = @('stage-build', '--ir', $ir, '--legacy', $legacy, '--out', $mod, '--report', $report, '--surface-registry', $registry)
 if ($KeepPacenotes) { $sbArgs += @('--keep-pacenotes', '1') }
-if ($Version -in 'v2', 'v1.3', 'v1.4', 'v1.5') {
+if ($Version -in 'v2', 'v1.3', 'v1.4', 'v1.5', 'v1.6') {
     if (-not $NoObjects) { $sbArgs += @('--objects', (Join-Path $root 'config\object-collision.toml')) }
     if (-not $NoPacenotes -and -not $KeepPacenotes) {
         $sbArgs += @('--pacenote-map', (Join-Path $root 'config\pacenote-map.toml'))
-        if ($Version -in 'v1.4', 'v1.5') { $sbArgs += @('--pacenote-report', (Join-Path $work "pacenotes-$Short-$Version.md")) }
+        if ($Version -in 'v1.4', 'v1.5', 'v1.6') { $sbArgs += @('--pacenote-report', (Join-Path $work "pacenotes-$Short-$Version.md")) }
         if ($Version -in 'v1.3', 'v1.4') { $sbArgs += @('--pacenote-assignment', 'greedy') }
     }
     if (-not $Respawn) { $Respawn = 'relay' }
 }
 if ($Version -in 'v1.3', 'v1.4' -and -not $NoVisuals) { $sbArgs += @('--visuals-canopies', 'full') }
-if ($Version -in 'v1.1', 'v1.2', 'v1.3', 'v1.4', 'v1.5' -and -not $NoVisuals) {
+if ($Version -eq 'v1.6') {
+    $sbArgs += @('--scenery', (Join-Path $root 'config\scenery.toml'), '--names', (Join-Path $root 'config\track-names.toml'))
+}
+if ($Version -in 'v1.1', 'v1.2', 'v1.3', 'v1.4', 'v1.5', 'v1.6' -and -not $NoVisuals) {
     $sbArgs += @('--visuals', $(if ($VisualsConfig) { (Resolve-Path $VisualsConfig).Path } else { Join-Path $root 'config\visuals.toml' }), '--visuals-host', $VisualsHost,
                  '--visuals-retarget', $(if ($Version -eq 'v1.1' -or $NoRetarget) { '0' } else { '1' }))
     if ($VisualsOwner) { $sbArgs += @('--visuals-owner', $VisualsOwner) }
     $sbArgs += @('--visuals-vegetation', $Vegetation)
+    if ($Version -eq 'v1.6') { $sbArgs += @('--visuals-vista', '1') }
 }
-if ([double]::IsNaN($GroundOffset)) { $GroundOffset = if ($Version -in 'v1.1', 'v1.2', 'v1.3', 'v1.4', 'v1.5') { -47 } else { 0 } }
+if ([double]::IsNaN($GroundOffset)) { $GroundOffset = if ($Version -in 'v1.1', 'v1.2', 'v1.3', 'v1.4', 'v1.5', 'v1.6') { -47 } else { 0 } }
 if ($GroundOffset -ne 0) { $sbArgs += @('--ground-offset', $GroundOffset.ToString([Globalization.CultureInfo]::InvariantCulture)) }
 if ($Respawn) { $sbArgs += @('--respawn', $Respawn) }
 Run $acrRef @sbArgs

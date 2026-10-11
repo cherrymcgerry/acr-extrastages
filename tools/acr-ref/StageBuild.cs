@@ -127,6 +127,7 @@ internal static class StageBuild
             report["options"]!["visuals_owner"] = vo.Owner;
             report["options"]!["visuals_vegetation"] = vo.Vegetation;
             report["options"]!["visuals_canopies"] = vo.Canopies;
+            if (vo.Vista) report["options"]!["visuals_vista"] = true;
         }
         var road = Road(ir, pl);
 
@@ -145,6 +146,16 @@ internal static class StageBuild
         report["host_collider_count"] = hostColliders;
         var cellInfo = BuildCell(o, ir, pl, legacy, outRoot, report, respawnMode, road, objectShapes);
         BuildTables(o, ir, legacy, outRoot, keepPacenotes, report, pacenoteMap is null ? null : Toml.Load(pacenoteMap), cellInfo);
+        if (o.Named.GetValueOrDefault("scenery") is { } sceneryCfg)
+        {
+            report["options"]!["scenery"] = sceneryCfg;
+            report["scenery"] = Scenery.Build(legacy, outRoot, Toml.Load(sceneryCfg), o.Usmap);
+        }
+        if (o.Named.GetValueOrDefault("names") is { } namesCfg)
+        {
+            report["options"]!["names"] = namesCfg;
+            report["names"] = TrackNames.Build(legacy, outRoot, Toml.Load(namesCfg));
+        }
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(reportPath))!);
         File.WriteAllText(reportPath, report.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
@@ -771,12 +782,18 @@ internal static class StageBuild
             var vo = report["options"]!;
             var opt = new Visuals.Options(vo["visuals_host"]?.GetValue<string>() ?? "start",
                 vo["visuals_retarget"]?.GetValue<bool>() ?? false, vo["visuals_owner"]?.GetValue<string>(),
-                vo["visuals_vegetation"]?.GetValue<string>() ?? "none", vo["visuals_canopies"]?.GetValue<string>());
+                vo["visuals_vegetation"]?.GetValue<string>() ?? "none", vo["visuals_canopies"]?.GetValue<string>(),
+                vo["visuals_vista"]?.GetValue<bool>() ?? false);
             RoadProbe? probe = vo["objects"]?.GetValue<string>() is { } objCfg
                 ? new RoadProbe(Road(ir, pl), new SurfaceGrid(Path.Combine(ir.Dir, "collision.glb"), pl), Toml.Load(objCfg)) : null;
             failures += Visuals.Check(new LegacyPackage(HostPaths.Resolve(root, HostPaths.Cell)), ir, pl, Toml.Load(visualsCfg), opt, w,
                                       report["cell"]?["visuals"], probe);
         }
+
+        if (report["options"]?["scenery"]?.GetValue<string>() is { } sceneryCfg)
+            failures += Scenery.Check(root, Toml.Load(sceneryCfg), new Options().Usmap, w, report["scenery"]);
+        if (report["options"]?["names"]?.GetValue<string>() is { } namesCfg)
+            failures += TrackNames.Check(root, Toml.Load(namesCfg), w);
 
         var bpath = HostPaths.Resolve(root, HostPaths.Baked);
         _ = new LegacyPackage(bpath);

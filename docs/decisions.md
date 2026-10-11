@@ -367,3 +367,65 @@ First stage: `new_zealand_rally_01_route_5` → `zz_acrdirt_nz01r5_P`. Built by 
     segment ± radius, cone vertices).
     - The drawn shape must stay inside them (+2 cm), and unclipped shapes must fill at least 0.8 of them per axis.
     - 2,722 shapes pass: 0 cm outside at most, minimum fill 0.84.
+- **v1.6: Hafren scenery hidden, DR2 vista, variant names [V offline; in game pending]:** the build adds
+  `stage-build --scenery config/scenery.toml --names config/track-names.toml --visuals-vista 1`.
+  - World Partition layout [V offline: CUE4Parse dump of all 163 cells, `acr-ref scenery-survey`]:
+    - The persistent level has 163 streaming cells. A cell loads when any of its data layers is active; a cell with no
+      layers always loads. FullForward activates BE01 (forward gameplay) and E8A3 (forward props).
+    - 75 layer-less cells hold the terrain tiles, foliage, PCG grass, tapes and physics props.
+    - Forward-only and shared cells: BE01 (9 plus 22VG), BE01+B42F (15, crowds), E8A3 (18), E8A3+C2CD (11). The
+      reverse-only cells are B42F (14) and C2CD (20).
+    - Also in the persistent level: 87 WorldPartitionHLOD actors (tracks and trees), the 4 terrain tiles, background,
+      placed trees, treelines and turbines.
+  - Cell retag [V offline]: each streaming cell except 22VG gets reverse-only layers. Its B42F/C2CD layers are kept,
+    or it gets C2CD if it had none.
+    - Changed: 128 cells (75 none→C2CD, 9 BE01→C2CD, 15 B42F+BE01→B42F, 18 E8A3→C2CD, 11 C2CD+E8A3→C2CD).
+    - Only the DataLayers FName array in each cell object is rewritten. The cell packages themselves are not
+      shipped.
+    - Assumption [I]: the runtime reads cell layers from the persistent level's cell objects, not from its own
+      data.
+  - Persistent-actor hiding [V offline]: an explicit zero SceneComponent.bVisible slot is added to each scene
+    component, a header-only unversioned edit.
+    - The slot index comes from the usmap class chain: StaticMeshComponent 171, HISM 203, ReplaceableFoliageISMC 209.
+    - Matching is by actor class (WorldPartitionHLOD, BP_TreelinesContainer_C, BC_MyhTurbineA_C) or by the mesh name
+      a component references (terrain tiles, BG, spruce, larch, beech, treeline).
+    - Result: 107 actors and 338 components; none had an explicit bVisible.
+    - HLODs must be hidden too, because UE draws them while their source cell is unloaded.
+  - Kept on purpose: sky (BC_DMSky_Candidate_C), weather, managers, post process, lighting, 111 reflection captures,
+    EnvAudioVolumes, PhysicsWorldBounds, the RVT volume, and the service park's persistent actors (X 3.2–3.3 km).
+    - The service park is gameplay-adjacent and not on our route.
+    - Side effects of unloading the forward cells: Hafren's crowds, crowd audio, marshals and TV (replay) cameras are
+      gone too. They were placed for Hafren's route.
+    - The reverse variant now also loads the formerly shared props.
+  - Round-trip limit: a round trip of the mod container alone cannot name imports from other packages. The check
+    therefore also matches the hidden actors by their own export names, from the build report (107 = 107).
+  - Vista: render/vista.glb (DR2's NONLOD_i_j ring) as the last visuals section, in the terrain's default material.
+    - 223,255 of 223,300 triangles are kept. Triangles over a 100 m cell touched by the drawn ground are dropped (45).
+    - The nearest vertex is 82.8 m from the centreline, and it passes the road-corridor check.
+  - Names [V offline; display I]: ST_Track source strings TRACK_HAFRENSOUTH_FULL_FORWARD → "Te Awanga Sprint Reverse"
+    and _SHORT → "Te Awanga Sprint".
+    - These are the variant row's StageName and Name keys, used by FullForward only.
+    - TRACK_STAGE_WALES_HAFRENSOUTH ("Hafren South") and TRACK_LOCATION_WALES ("Wales") are shared and unchanged.
+    - Game.locres (en) has entries for these keys. UE uses a locres entry only when its source hash matches, so the
+      edited source string should win [I].
+    - The map, elevation and lobby images are textures and unchanged. The Elevation row fields are unchanged.
+  - Frame rate [I]: should be the same or better. The loaded scenery is down to cell 22VG plus the service park. The
+    vista is one extra mesh section.
+  - Sky, weather and time (investigated only, nothing changed):
+    - Hafren places its own `BC_DMSky_Candidate_C` in the persistent level, with Latitude 52.28, Longitude −3.4, Time
+      Zone 0, 2025-11-03, Time of Day 1559.36, Cloud Coverage 1.11, Fog 1.6 and Height Fog Density 0.00216. Every
+      track's sky derives from the plugin BP `/dmenvironment/dmsky/Blueprints/BC_DMSky_C`.
+    - Siblings: BC_DMSky_CandidateGreece (lat 48, lon 2.35, TZ 1, September 5), Snow, Snow_Livigno,
+      Montecarlo_Reserve and DMSky_Montecarlo_Update03/04/04Cross. Montecarlo_Bollene is a child of Candidate.
+      BC_SkySelector_C lists 7 sky BPs but is not used by Hafren.
+    - Weather: the variant row's WeatherConfig {WeatherTrackConfigs, "Wales"} leads to DA_WalesWeatherConfig
+      (temperature, wetness, snow, forecast). Rows also exist for MonteCarlo, Alsace, Livigno and Greece. Weather
+      configs carry no sky visuals.
+    - BC_WeatherActor_C holds global_day_time 1559.361, wetness 0.1, gloominess 0.45 and fogginess 0.2.
+    - Options, least risky first:
+      1. Same-size edits of the placed sky actor's latitude, longitude, time zone, date, time, cloud and fog values,
+         in the persistent package that v1.6 already ships. Hawke's Bay is about −39.7, 176.9, TZ +13; the weather
+         actor's day time would follow.
+      2. Change the WeatherConfig row from Wales to Greece (an FName swap that changes the weather simulation only).
+      3. Swap the sky actor's class to another location's BP. This means rewiring the class, archetype and component
+         templates; high risk.

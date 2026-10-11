@@ -1,0 +1,9 @@
+# v1.6 menu / HUD names (acr-ref stage-build --names; TrackNames.cs). Source strings of ST_Track entries.
+# DT_TracksVariants WelesS4HafrenSouthFullForward: Name = TRACK_HAFRENSOUTH_FULL_FORWARD_SHORT, StageName =
+# TRACK_HAFRENSOUTH_FULL_FORWARD; both are used by this variant only.
+# Not changed, because other variants share them: TRACK_STAGE_WALES_HAFRENSOUTH ("Hafren South", both Hafren South
+# variants) and TRACK_LOCATION_WALES ("Wales", the location card of every Welsh stage).
+
+[ST_Track]
+TRACK_HAFRENSOUTH_FULL_FORWARD = "Te Awanga Sprint Reverse"
+TRACK_HAFRENSOUTH_FULL_FORWARD_SHORT = "Te Awanga Sprint"

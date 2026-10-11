@@ -461,3 +461,61 @@ If it's still late everywhere, try Pacenote Anticipation "Early" once and say wh
 - The trunks look OK.
 - With that, the single stage is functionally complete: physics, objects, timing, respawn and pacenotes. The rest
   is presentation: Hafren South's scenery is still visible, and the menu still names the Welsh stage.
+
+## v1.6 test: Hafren South's scenery hidden, DR2 vista, "Te Awanga Sprint Reverse"
+
+`work\acr\dist-v1.6\zz_acrdirt_nz01r5_P.*`: same container name, so remove v1.5's three files first. Build:
+`.\mods\acrdirt-stage\build.ps1 -Version v1.6 -Verify`.
+- Offline: 118 PASS / 0 FAIL (CUE4Parse on the mounted container 11, round trip 53).
+- Sizes: ucas 397,253,138, utoc 74,132, pak 347. The container is 68 MB bigger than v1.5, because it now also carries
+  the persistent level (WalesS4HafrenSouth.umap, with its 20 MB .ubulk) and ST_Track.
+- Triangles: 1,519,474 (v1.5's 1,296,219 plus 223,255 for the vista).
+
+What changed from v1.5 (details in docs/decisions.md, D7 v1.6). Everything is the same as v1.5 except:
+- **Hafren streaming cells:** 128 of the persistent level's 163 streaming cells no longer load in this variant. They
+  are retagged to the reverse variant's data layers only (config/scenery.toml).
+  - These cells hold all of Hafren's terrain tiles, foliage, PCG grass, tapes, crowds, marshals, TV cameras and
+    physics props.
+  - The only forward cell left is 22VG, the gameplay cell with our visuals, triggers, pacenote and respawn edits.
+- **Persistent-level visuals:** 107 actors (338 components) are set invisible:
+  - all 87 HLODs, which UE draws in place of unloaded cells;
+  - the 4 Hafren terrain tiles (about 2 km each) and the 2 background meshes;
+  - 7 placed trees, the treelines container and the 6 wind turbines.
+- **Horizon:** DR2's own distant vista ring (render/vista.glb, out to about 10 km) is drawn in the same default
+  grey-grid material as the terrain. Its nearest vertex is 83 m from the road.
+- **Names:** the variant's string-table entries are "Te Awanga Sprint Reverse" (stage name) and "Te Awanga Sprint"
+  (short name), replacing "Afon Bidno - Severn" and "Afon Bidno".
+  - The track name "Hafren South" and the country "Wales" are unchanged, because other variants share them.
+  - The map, elevation and lobby images are unchanged (they are textures).
+- **Unchanged:** sky, weather, time of day, lighting, post process, reflection captures, audio volumes, the managers
+  and the BakedData physics.
+  - The service park's own persistent actors also stay: its ground, decals, barriers and props (level X 3.2–3.3 km,
+    Y 0.75–1.26 km), and the radio tower next to it.
+
+Check:
+1. **Stage select and loading screen:** the stage reads "Te Awanga Sprint Reverse" (or "Te Awanga Sprint" where a
+   short name is shown).
+   - The location and country still say Hafren South / Wales, and the map image is Hafren's.
+   - Note where a Welsh name still appears, including the HUD and results screen.
+2. **Loads, and the start works:** the countdown, the start line, the timer and the finish, as before.
+3. **Scenery:**
+   - no Hafren terrain, trees, grass, hedges, tapes, crowds, marshals or wind turbines anywhere;
+   - only the DR2 ground, the coloured DR2 objects, the edge posts and gates, and the grey vista hills on the horizon;
+   - nothing floating or cut off where Hafren used to be.
+   - Note anything that still looks Welsh, and where.
+4. **Horizon:** grey hills all round at a distance. Note whether any of them cut through the near DR2 ground or hang
+   in the air.
+5. **Frame rate:** compared with v1.5 it should be the same or better. This is inferred, not measured: Hafren's
+   streamed terrain, foliage, HLODs and crowds are gone, and the vista adds one 223k-triangle mesh section. Please
+   give rough numbers or impressions for both versions if you can.
+6. **Gameplay as in v1.5:** pacenotes, solid objects, respawn (drive off the road once), the trunks.
+7. **Sky:** unchanged, the Welsh November afternoon at 15:59. This is expected; sky changes are a later step.
+8. Optionally, the reverse variant (Afon Bidno reverse) still loads Hafren's own cells. It was already unusable,
+   because of our BakedData physics.
+
+Report:
+- the names you see in each place;
+- anything Welsh that's still visible, and where;
+- how the horizon looks;
+- the frame rate;
+- anything that broke compared with v1.5, such as audio, replay cameras or the start sequence.
