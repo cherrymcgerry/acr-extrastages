@@ -160,3 +160,42 @@ First stage: `new_zealand_rally_01_route_5` → `zz_acrdirt_nz01r5_P`. Built by 
   - In-game result: pending (`docs/first-stage-test.md`).
 - **Consequences:** the reverse variant becomes unusable while the mod is installed (shared
   BakedData). Visuals stay Hafren's until route A1 or a mesh writer exists.
+
+## D7. Single-stage port v2: surfaces, objects, pacenotes, respawn walls (nz01r5)
+
+- **Surfaces [V]:**
+  - Every collider's physical material must be listed in `DA_PhysMaterialsMappingCommon`, the only Kunos surface
+    registry (38 DMPhysicalMaterials). Otherwise the track-physics setup reads an unset `trackData.surfaceDef`
+    (`ksPhysicsAC/Track.cpp`, acr.exe RVA 0x4F64604) and the stage load crashes. This happened to v1 via
+    DEFA -> PM_Fallback.
+  - Enforced three ways:
+    - `surface-map-check` validates config/surface-map.toml against the exported vanilla registry on every build.
+    - stage-build remaps any unregistered ground material to PM_SurfaceGrass and refuses to import an
+      unregistered one.
+    - stage-verify fails if any collider uses one.
+- **Vanilla inputs [V]:**
+  - All build inputs come from a hard-link view of the shipped containers (`global`, `pakchunk*-Windows`), never
+    `~mods`, through the stamped cache `work/acr/legacy-vanilla`.
+  - The offline check asserts that the forward row's Length equals the DR2 length.
+- **Objects:** DR2 objects become invisible colliders in BakedData. Simple shapes (box, capsule) are appended to
+  BakedSimpleCollisionData under the always-active None stride, reusing the host foliage actor as owner. Cones become
+  small mesh colliders. Materials map to PM_Wall*. Soft vegetation and light or phantom breakables are skipped.
+  Shapes that intrude more than 0.3 m into the road at car height (over a road surface code) are dropped and
+  reported. No visuals until a mesh writer exists.
+- **Pacenotes [V offline]:**
+  - The ACR table is a list of rows: SplineDistanceM (corner start along the CenterSpline), LengthM, and tokens.
+    Severity 6 is the fastest, as in DR2. Right means a positive heading change in UE XY.
+  - DR2 calls map through config/pacenote-map.toml.
+  - Each corner is located on the rebuilt spline by curvature, searching −30 to +300 m from the call distance with
+    the direction required to match. If that fails, it is placed 80 m after the call.
+  - Rows link (Into/And) only within one DR2 call. A "Finish" row sits 50 m before the line.
+  - New FNames must be inserted at `NamesReferencedFromExportDataCount`: retoc keeps only that prefix for export
+    data, and appended names are lost.
+- **Respawn walls [inferred]:**
+  - The host's 837 respawn walls are unattached spline meshes in world space, so moving the root (v1) leaves
+    them on Hafren's road; 8 of them overlap the DR2 road.
+  - v2 rigidly re-lays them end to end along the DR2 out-of-bounds contour. Inserted RelativeLocation/Rotation and
+    Z scale give a span from 30 m below to 15 m above the contour. Pieces closer than 3 m to the road, and spares,
+    are sunk.
+  - Whether the game respawns from these walls alone, without host data we did not edit, is unverified until the
+    in-game test.

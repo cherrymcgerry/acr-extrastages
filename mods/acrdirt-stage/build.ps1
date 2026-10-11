@@ -77,6 +77,7 @@ $registry = Join-Path $legacy 'DA_PhysMaterialsMappingCommon.json'
 if (-not (Test-Path $registry)) {
     Run $acrRef export acr/Content/Data/Gameplay/PhysicalMaterials/DA_PhysMaterialsMappingCommon.uasset --game $vanilla --out $registry
 }
+Run $acrRef surface-map-check --map (Join-Path $root 'config\surface-map.toml') --registry $registry
 if ($ExtractOnly) { return }
 
 $ir = Join-Path $root "work\ir\$Stage"

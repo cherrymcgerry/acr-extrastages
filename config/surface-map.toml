@@ -2,7 +2,9 @@
 #
 # Keys are the 4-char codes stored per triangle in route_N/track.jpk (see docs/dr2-formats.md); their definitions
 # (base_name inheritance, MECHANICS/AUDIO/PARTICLE names, friction) live in game_1.dat surface_materials.xml.
-# Values are ACR assets under /Game/Data/Gameplay/PhysicalMaterials/.
+# Values are ACR assets under /Game/Data/Gameplay/PhysicalMaterials/, and must be listed in the game's surface registry
+# DA_PhysMaterialsMappingCommon (a collider with any other material crashes the stage load in the Kunos track physics);
+# `acr-ref surface-map-check` (run by mods/acrdirt-stage/build.ps1) enforces this. "none" = no collision.
 # `dr2-extract stage-ir` fails on any code used by a stage that is not listed here.
 #
 # This covers every code found within 250 m of all 156 DR2 rally routes (`dr2-extract catalog`). Grouping is by
@@ -101,7 +103,7 @@
 "CATG" = "PM_SurfaceMetal"          # cattle grid (base PHYS, mechanics CATTLEGRID)
 
 # --- other -----------------------------------------------------------------------------------------------------
-"DEFA" = "PM_Fallback"              # DEFAULT
+"DEFA" = "PM_SurfaceGrass"          # DEFAULT (PM_Fallback is not a registered Kunos surface: stage-load crash)
 
 # =================================================================================================================
 # Object collision (route_N/objects.ens instances -> route_objecttypes.pssg shapes).

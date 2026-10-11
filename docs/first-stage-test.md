@@ -168,3 +168,35 @@ of the Paks (`global` + `pakchunk*-Windows`, no `~mods`; mods/common/vanilla.ps1
 Fixed v1 (`work\acr\dist`): ucas 229,533,612, utoc 43,083, pak 347; PASS 30 / FAIL 0.
 Bisect set if it still crashes: `work\acr\bisect\` (A = DT only, Bfix = + BakedData, Cfix = + cell; B/C/D = the same
 with the original v1 BakedData); test order in `work\acr\bisect\TESTS.md`.
+
+## v2 test (after fixed v1 loads and drives)
+
+`work\acr\dist-v2\zz_acrdirt_nz01r5_P.*` uses the **same container name** as v1 and overrides the same four host
+packages. Install only one of them: remove the v1 files from `~mods` before copying v2 in (and back to switch).
+Build: `.\mods\acrdirt-stage\build.ps1 -Version v2 -Verify` (offline: PASS 50 / FAIL 0). Sizes: ucas 230,347,525,
+utoc 43,227, pak 347.
+
+What v2 adds over v1:
+- **Object collision (invisible):** 3189 DR2 objects become colliders; there are no visuals, so expect to hit things
+  you cannot see (DR2 trees, fences, guardrails, rocks, poles). 1670 trunks + other simple shapes = 2205 new
+  simple entries (375 boxes, 1830 capsules); 815 trunk cones + 169 guardrail cones = 2 small mesh colliders.
+  Materials are PM_Wall* (all registered surfaces). Skipped: bushes/soft vegetation, light and phantom breakables.
+  69 objects whose solid part would intrude into the road at car height were dropped (cattle-grid deck, start/finish
+  gantries, scaffolding, a few roadside trees).
+- **Pacenotes:** 73 rows from the 72 DR2 calls (71 mapped; `modifier_a_1` x2 unmapped and dropped), via
+  config/pacenote-map.toml. Corners are positioned on the road geometry (53 of 63; 10 at the DR2 call distance).
+  Finish call 50 m before the finish line, "stop at marshals" after it.
+- **Respawn walls:** v1 left the host's 837 invisible respawn walls where they were (on Hafren's road, not
+  the DR2 one). In v1, 8 of them overlap the DR2 road, 5 at road height, so an unexpected respawn there is a v1
+  artefact. v2 re-lays 592 walls end to end along the DR2 out-of-bounds contour (10.06 km, min 3.19 m from the road)
+  and sinks the rest.
+
+What to check, in addition to the v1 list:
+1. Drive into a few roadside trees/fences: the car should stop or bounce (not pass through).
+2. No invisible obstacle on the road itself (report the distance on the stage if there is one).
+3. Pacenotes: calls arrive before the corners and match their direction/severity; "Finish" before the line.
+4. Going off the road far enough triggers a respawn; staying on the road never does.
+
+Isolation switches if v2 misbehaves (each writes to work\acr\dist-v2; rebuild, then reinstall):
+`-NoObjects` (no object collision), `-NoPacenotes` (emptied table as in v1), `-Respawn root|sink` (v1 walls / all
+walls sunk).

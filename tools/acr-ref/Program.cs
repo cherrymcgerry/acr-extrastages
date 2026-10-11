@@ -39,6 +39,7 @@ internal static class Program
                 "stage-check" => StageBuild.RunCheck(opts),
                 "stage-verify" => StageVerify.Run(opts),
                 "pacenote-survey" => Pacenotes.Survey(opts),
+                "surface-map-check" => SurfaceMapCheck.Run(opts),
                 _ => Fail($"unknown command '{args[0]}'"),
             };
         }
@@ -72,6 +73,8 @@ internal static class Program
           acr-ref stage-check    --ir <dir> --legacy <root> --report <f.json> [--out file]   offline collision/raycast/spline checks
           acr-ref stage-verify   --ir <dir> --game <dir with Paks incl. the built container> [--out file]   CUE4Parse re-read
           acr-ref stage-selftest --legacy <root>   byte-exact round trips of the host packages
+          acr-ref surface-map-check --map config/surface-map.toml --registry <DA_PhysMaterialsMappingCommon .json>
+                                 every surface-map target must be a registered Kunos surface
           acr-ref schema <Type>...                 usmap property indices (unversioned serialization order)
 
         binary analysis:
