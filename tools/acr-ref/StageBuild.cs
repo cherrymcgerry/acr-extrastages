@@ -139,9 +139,9 @@ internal static class StageBuild
         report["surface_registry"] = new JsonObject { ["registered"] = registry.Count, ["remapped"] = remap };
         if (remap.Count > 0) Console.WriteLine($"surfaces: remapped unregistered {string.Join(", ", remap.Select(kv => kv.Key))} -> {groundFallback}");
 
-        int hostColliders = BuildBaked(ir, pl, legacy, outRoot, report, objectsCfg is null ? null : Toml.Load(objectsCfg), road, registry);
+        int hostColliders = BuildBaked(ir, pl, legacy, outRoot, report, objectsCfg is null ? null : Toml.Load(objectsCfg), road, registry, out var objectShapes);
         report["host_collider_count"] = hostColliders;
-        var cellInfo = BuildCell(o, ir, pl, legacy, outRoot, report, respawnMode, road);
+        var cellInfo = BuildCell(o, ir, pl, legacy, outRoot, report, respawnMode, road, objectShapes);
         BuildTables(o, ir, legacy, outRoot, keepPacenotes, report, pacenoteMap is null ? null : Toml.Load(pacenoteMap), cellInfo);
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(reportPath))!);
@@ -197,7 +197,7 @@ internal static class StageBuild
     }
 
     static int BuildBaked(Ir ir, Placement pl, string legacy, string outRoot, JsonObject report, Toml? objectsCfg, RoadCorridor road,
-                          HashSet<string> registry)
+                          HashSet<string> registry, out ObjectColliders.Result? objectShapes)
     {
         var path = HostPaths.Resolve(legacy, HostPaths.Baked);
         var pkg = new LegacyPackage(path);
@@ -382,6 +382,7 @@ internal static class StageBuild
         r["dr2_triangles_per_material"] = new JsonObject(perMaterial.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)kv.Value)));
         r["uexp_bytes"] = $"{data.Length} -> {outData.Length}";
         Console.WriteLine($"BakedData: {colliders.Count} host + {all.Count} DR2 colliders, uexp {data.Length} -> {outData.Length} bytes");
+        objectShapes = objs;
         return colliders.Count;
     }
 
@@ -465,7 +466,8 @@ internal static class StageBuild
         }
     }
 
-    static CellInfo BuildCell(Options o, Ir ir, Placement pl, string legacy, string outRoot, JsonObject report, string respawnMode, RoadCorridor road)
+    static CellInfo BuildCell(Options o, Ir ir, Placement pl, string legacy, string outRoot, JsonObject report, string respawnMode, RoadCorridor road,
+                              ObjectColliders.Result? objectShapes)
     {
         var path = HostPaths.Resolve(legacy, HostPaths.Cell);
         var cell = new LegacyPackage(path);
@@ -603,7 +605,7 @@ internal static class StageBuild
             r["respawn"] = Respawn.Relay(cell, objs, contour, road, sinkAll: respawnMode == "sink");
             actors.Add($"respawn walls ({respawnMode}): {r["respawn"]!.ToJsonString()}");
         }
-        if (o.Named.GetValueOrDefault("visuals") is { } visualsCfg) r["visuals"] = Visuals.Build(cell, ir, pl, Toml.Load(visualsCfg), Visuals.Options.From(o.Named));
+        if (o.Named.GetValueOrDefault("visuals") is { } visualsCfg) r["visuals"] = Visuals.Build(cell, ir, pl, Toml.Load(visualsCfg), Visuals.Options.From(o.Named), objectShapes, InPhysicsBounds);
         r["actors"] = actors;
         r["dr2_centre_length_m"] = newLine.Length / 100;
         foreach (var a in actors) Console.WriteLine($"  {a}");

@@ -95,7 +95,7 @@ internal static class StageVerify
         if (secs is not null && secs.Properties.Count > 1)
         {
             var counts = secs.Properties.OfType<StructProperty>().Select(sp => (sp.Value?.StructType as FStructFallback)?.GetOrDefault<UScriptArray>("ProcVertexBuffer")?.Properties.Count ?? 0).ToList();
-            C(counts.Count == 5 && counts.Skip(1).All(c => c > 0) && mats?.Properties.Count == 5 && !startMesh.GetOrDefault<bool>("bHiddenInGame"),
+            C(counts.Count >= 5 && counts.All(c => c > 0) && mats?.Properties.Count == counts.Count && !startMesh.GetOrDefault<bool>("bHiddenInGame"),
               $"visuals via CUE4Parse: mesh of {startMesh.Outer?.Name} {counts.Count} sections ({string.Join(", ", counts)} vertices), {mats?.Properties.Count ?? 0} material slots ({string.Join(", ", System.Text.RegularExpressions.Regex.Matches(matJson, @"MI_\w+").Select(m => m.Value).Distinct())}), not hidden in game");
             foreach (var trig in cell.Where(e => e.ExportType is "BC_StartSequenceTrigger_C" or "BC_EndSequenceTrigger_C"))
             {

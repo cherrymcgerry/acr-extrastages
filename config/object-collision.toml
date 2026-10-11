@@ -21,6 +21,10 @@ max_penetration_m = 0.3
 car_height_min_m = -1.0
 car_height_max_m = 2.5
 
+[template_wall]
+# per-template wall material overrides for DR2 data quirks (shapes with acr_wall "none" stay skipped)
+"maple_02_e" = "PM_WallWoodTreeTrunks"   # its trunk cone is tagged sArmco (guardrail) in route_objecttypes.pssg
+
 [shapes]
 # cones (trunks, armco ends, traffic cones) become small double-sided mesh colliders with this many segments
 cone_segments = 8

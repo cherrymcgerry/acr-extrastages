@@ -160,6 +160,8 @@ First stage: `new_zealand_rally_01_route_5` → `zz_acrdirt_nz01r5_P`. Built by 
   - In-game result: pending (`docs/first-stage-test.md`).
 - **Consequences:** the reverse variant becomes unusable while the mod is installed (shared
   BakedData). Visuals stay Hafren's until route A1 or a mesh writer exists.
+- **Status:** v1.2 (ground, road, markers, start/finish visible; placement −47 m) is verified in game; see the
+  v1.2 bullet below and `docs/first-stage-test.md`.
 - **In-game result (fixed v1) [V]:** the stage loads, the menu shows 4.69 km, and the car drives on DR2
   collision. stage-validate shows 100 % of loaded wheel contacts on DR2 ground. But nothing is visible: the
   DR2 road is invisible and floats over Hafren's scenery.
@@ -210,6 +212,9 @@ First stage: `new_zealand_rally_01_route_5` → `zz_acrdirt_nz01r5_P`. Built by 
   - [V offline] Both survive retoc's zen round trip, and CUE4Parse resolves the new owners and references.
   - Rejected: the respawn walls (hidden overlap triggers that respawn needs), and the 2 baked cable meshes in cell
     `1HVWF…` (spatially loaded, so they would stream out).
+  - **[V in game] v1.2 confirmed:** the visuals stay visible for the whole drive, and terrain collision, start, timer
+    and finish all work, with good frame rate. The retarget is the fix. The exact native behaviour (hide vs. clear
+    vs. rebuild) remains unknown, and the fallbacks were not needed.
 - **Real DR2 visuals: assessment [inferred, not implemented]:**
   - **Geometry without the editor is feasible** if v1.1 renders. ProcMeshSections take arbitrary vertices, normals,
     tangents, UV0–3 and colours, so DR2 terrain tiles and object glb meshes can be baked in with their own UVs.
@@ -251,7 +256,7 @@ First stage: `new_zealand_rally_01_route_5` → `zz_acrdirt_nz01r5_P`. Built by 
   BakedSimpleCollisionData under the always-active None stride, reusing the host foliage actor as owner. Cones become
   small mesh colliders. Materials map to PM_Wall*. Soft vegetation and light or phantom breakables are skipped.
   Shapes that intrude more than 0.3 m into the road at car height (over a road surface code) are dropped and
-  reported. No visuals until a mesh writer exists.
+  reported. Visible from v1.3 (below).
 - **Pacenotes [V offline]:**
   - The ACR table is a list of rows: SplineDistanceM (corner start along the CenterSpline), LengthM, and tokens.
     Severity 6 is the fastest, as in DR2. Right means a positive heading change in UE XY.
@@ -269,3 +274,17 @@ First stage: `new_zealand_rally_01_route_5` → `zz_acrdirt_nz01r5_P`. Built by 
     are sunk.
   - Whether the game respawns from these walls alone, without host data we did not edit, is unverified until the
     in-game test.
+- **v1.3 = v1.2 + the features above, with visible objects [V offline, in-game pending]:**
+  - The start-trigger mesh retarget from D6 (v1.2) is the confirmed visuals fix, and v1.3 keeps it.
+  - The kept object colliders are also drawn, as extra sections of the same visuals mesh, one flat-colour
+    `MI_Wall*` per class (`config/visuals.toml` `[objects]`, `[object_materials]`; `VisualObjects.cs`):
+    - Trees: the trunk colliders themselves (capsule → 6-sided prism, cone, box), plus a non-solid crown proxy.
+    - Other solid objects: DR2's render mesh from `render/objects.glb`, placed by the instance TRS. The glb holds one
+      mesh per template in template space, the same frame as the collider shapes. Offline, 445 of 445 collider
+      centres lie within the placed render bounds (+1 m). Meshes over 4,000 triangles are drawn as their colliders.
+    - Anything not solid: an octahedron over the render bounds in dark green.
+  - Budget: instancing every render mesh would cost 13.4 M triangles, 90 % of it vegetation, so vegetation is drawn as
+    proxies. v1.3 totals 1.38 M triangles (objects 366 k), and the offline check enforces ≤ 3 M.
+  - Data quirk: `maple_02_e`'s trunk cone is tagged `sArmco` (guardrail). `config/object-collision.toml`
+    `[template_wall]` gives it tree-trunk physics. This also changes v2 if rebuilt.
+  - Pacenotes are unchanged from v2. `modifier_a_1` (2×) stays unmapped, because the code is not decoded.

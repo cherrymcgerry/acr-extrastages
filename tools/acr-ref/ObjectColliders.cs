@@ -95,7 +95,7 @@ internal static class ObjectColliders
 
     // ---- frames ----
 
-    static Matrix4x4 Trs(JsonNode? t)
+    internal static Matrix4x4 Trs(JsonNode? t)
     {
         if (t is null) return Matrix4x4.Identity;
         if (t["matrix"] is JsonArray m && m.Count == 16)
@@ -185,6 +185,7 @@ internal static class ObjectColliders
         var skipBreaks = cfg.Arr("skip", "breaks_on_impulse").Cast<string>().ToHashSet();
         double maxPen = cfg.Num("road", "max_penetration_m") * 100, hMin = cfg.Num("road", "car_height_min_m") * 100, hMax = cfg.Num("road", "car_height_max_m") * 100;
         int coneSeg = (int)cfg.Num("shapes", "cone_segments");
+        var wallOverride = cfg["template_wall"];
 
         var skipped = new SortedDictionary<string, int>();
         var keptPer = new SortedDictionary<string, int>();
@@ -207,6 +208,7 @@ internal static class ObjectColliders
                     var brk = sh["breaks_on_impulse"]?.GetValue<string>();
                     var kind = sh["kind"]!.GetValue<string>();
                     if (wall == "none") { Skip("acr_wall none"); continue; }
+                    if (wallOverride.TryGetValue(tname, out var ov) && ov is string ovs) wall = ovs;
                     if (skipClasses.Contains(cls)) { Skip($"shape class {cls}"); continue; }
                     if (brk is not null && skipBreaks.Contains(brk)) { Skip($"breaks on {brk}"); continue; }
                     if (body["static"]?.GetValue<bool>() == false) { Skip("not static"); continue; }

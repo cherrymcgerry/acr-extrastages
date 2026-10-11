@@ -273,3 +273,68 @@ If the geometry still vanishes, test the ordered set in `work\acr\visual-bisect\
   the trigger actor itself is hidden at race start. This is a structural package change: if the stage fails to load,
   report it.
 - **B (`B-end-trigger`):** visuals on the end trigger's own mesh, nothing retargeted (diagnostic).
+
+**v1.2 result (in game, verified by the user):**
+- The road, edge markers and terrain are visible and stay visible for the whole drive.
+- Terrain collision works: hitting a side wall causes damage and pushes the car back.
+- Start, timer and finish all work. Frame rate is good, and the surface feels like gravel.
+- So the start-trigger `MeshComponent` retarget is the confirmed fix, and the visual-bisect variants were not needed.
+
+## v1.3 test: v1.2 + solid DR2 objects (visible) + pacenotes + respawn walls
+
+`work\acr\dist-v1.3\zz_acrdirt_nz01r5_P.*`: same container name, so install only this one.
+Build: `.\mods\acrdirt-stage\build.ps1 -Version v1.3 -Verify` (offline: CUE4Parse 11 PASS / 0 FAIL, round trip
+30 PASS / 0 FAIL). Sizes: ucas 349,199,620, utoc 64,995, pak 347.
+
+What v1.3 adds to v1.2 (placement, ground and the visuals fix are unchanged):
+- **Object collision (as v2):** 3,189 collider shapes from 1,843 DR2 objects, as 2,205 simple entries (boxes and
+  capsules) plus 1 mesh collider for cones (trunk bases), all with registered `PM_Wall*` materials.
+  - 69 shapes that would intrude into the road at car height are dropped.
+  - Skipped as drive-through: soft vegetation (7,114 shapes) and light, lightest and phantom breakables (1,396).
+  - New: `maple_02_e`'s trunk is tagged as guardrail in the DR2 data. It now gets tree-trunk physics
+    (`config/object-collision.toml` `[template_wall]`).
+- **Objects drawn in flat colours:** every solid object is visible (1,843 of 1,843):
+  - tree trunks: orange prisms on exactly the trunk colliders, with a dark-green crown that is NOT solid;
+  - wood (fences, gates, posts, sheds): yellow DR2 meshes;
+  - metal (fences, signs, the timing gantry): violet;
+  - concrete (building): blue; rock: cyan; plastic: bright green;
+  - cars and vans: black boxes, drawn as their colliders;
+  - **dark green = drive-through:** bushes, ferns, grass, cloth, light breakables, and objects dropped from the road
+    corridor (8,766 low-poly octahedra).
+
+  Render meshes are DR2's own meshes up to 4,000 triangles per object. Heavier ones (vehicles, scaffolding banners,
+  the start gantry) are drawn as their collider shapes. Offline, every collider centre lies within its object's
+  render bounds (445 of 445 checked).
+- **Triangles:** 1,377,177 in total (ground 1,006,007, markers and gates 4,928, objects 366,241; v1.2 had 1.01 M).
+  The visuals export is 118.9 MB (v1.2: 67.8 MB).
+- **Pacenotes (as v2):** 73 rows from the 72 DR2 calls.
+  - The build reports 71 of 72 calls as mapped. Two calls carry the undecoded DR2 modifier `modifier_a_1`, which is
+    dropped; both corners are still called.
+  - 53 of 63 corners are positioned on the road geometry; the other 10 sit at the DR2 call distance.
+  - The finish call comes 50 m before the line (at 4,671 m).
+- **Respawn walls (as v2):** fixes v1's walls on Hafren's road, 8 of which overlapped the DR2 road.
+  - 592 walls are re-laid end to end along the DR2 out-of-bounds contour (9.5 of 10.1 km covered), at least 3.19 m
+    from the road edges.
+  - 6 walls that were too close to the road are sunk, along with 239 spares.
+  - Where the car is put back is decided by the game. Its race splines (CenterSpline, 446 points, 4,848.8 m) are
+    rebuilt from the DR2 gates, and the ground raycast hits DR2 ground at all 446 gate crossings (max 4.4 cm off), so
+    a respawn should land on the DR2 road. This is inferred until tested.
+
+Check:
+1. Objects are visible and solid: drive gently into an orange trunk, a yellow fence and a cyan rock; the car should
+   stop or bounce. Dark-green shapes should let you through. Note anything solid that you cannot see, or anything
+   coloured (not dark green) that you pass through, with the stage distance.
+2. Co-driver: calls come before the corners and match their direction and severity; "Finish" comes before the line.
+3. Respawn: leave the road far enough to trigger a respawn, and also use the manual reset. Both should put you back
+   on the road (report where if not). Staying on the road should never trigger one.
+4. Frame rate compared with v1.2, especially in the forest sections.
+5. As in v1.2: timer start and finish, and the visuals stay visible.
+
+Isolation switches if v1.3 misbehaves:
+- `-NoObjects`: no object collision or object visuals.
+- `-NoPacenotes`.
+- `-Respawn root|sink`.
+
+Optional texture experiment (docs/visuals-plan.md): `work\acr\tex-proof\dist` is v1.3 with Hafren's own terrain blend
+and gravel road materials on the ground sections instead of grid and light blue. Install it like v1.3 and report how
+the ground looks (screenshot): textured, stretched, or a flat or black colour.

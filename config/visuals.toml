@@ -1,5 +1,5 @@
-# Interim visuals (stage-build --visuals, build.ps1 -Version v1.1): render-only geometry written into the forward
-# gameplay cell's start-trigger ProceduralMeshComponent. See docs/decisions.md D6 (v1.1).
+# Interim visuals (stage-build --visuals, build.ps1 -Version v1.1+): render-only geometry written into a
+# ProceduralMeshComponent of the forward gameplay cell. See docs/decisions.md D6 (v1.1, v1.2) and D7 (v1.3 objects).
 
 [road]
 # DR2 ground codes drawn with the road material; all other DR2 collision is drawn as terrain
@@ -18,3 +18,24 @@ terrain = ""
 road = "/Game/Data/Gameplay/PhysicalMaterials/MI_SurfaceGravelFine"
 posts = "/Game/Data/Gameplay/PhysicalMaterials/MI_WallMetalPole"
 gates = "/Game/Data/Gameplay/PhysicalMaterials/MI_SurfaceGrass"
+
+[objects]
+# only used when stage-build also gets --objects (v1.3): the solid DR2 objects (the colliders written to BakedData)
+enabled = 1
+max_mesh_triangles = 4000       # per instance; heavier render meshes (vehicles, scaffolding banners, the start gantry)
+                                # are drawn as their collider shapes instead
+prism_sides = 6                 # capsule colliders (tree trunks) drawn as n-sided prisms
+max_total_triangles = 3000000   # offline check budget for the whole visuals mesh
+tree_shape_classes = ["sSolidTreeLeafy", "sSolidPalmShortTree"]
+
+[object_materials]
+# flat colours (SurfaceColor of each MI): trunks orange, wood yellow, metal violet (posts stay magenta), concrete blue,
+# rock cyan, plastic bright green, other (cars) black, soft (tree crowns, bushes, anything not solid) dark green
+trunks = "/Game/Data/Gameplay/PhysicalMaterials/MI_WallHayBale"
+wood = "/Game/Data/Gameplay/PhysicalMaterials/MI_WallWood"
+metal = "/Game/Data/Gameplay/PhysicalMaterials/MI_WallCloth"
+concrete = "/Game/Data/Gameplay/PhysicalMaterials/MI_WallConcrete"
+rock = "/Game/Data/Gameplay/PhysicalMaterials/MI_WallRock"
+plastic = "/Game/Data/Gameplay/PhysicalMaterials/MI_WallPlastic"
+other = "/Game/Data/Gameplay/PhysicalMaterials/MI_WallBasic"
+soft = "/Game/Data/Gameplay/PhysicalMaterials/MI_WallBush"

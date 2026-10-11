@@ -44,7 +44,8 @@ internal static class Visuals
         return hits[0];
     }
 
-    public static JsonObject Build(LegacyPackage cell, StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, Options opt)
+    public static JsonObject Build(LegacyPackage cell, StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, Options opt,
+                                   ObjectColliders.Result? objects, Func<Splines.V3, bool> inPhysicsBounds)
     {
         var r = new JsonObject();
         int hostActor = TriggerActor(cell, opt.Host), otherActor = TriggerActor(cell, opt.Host == "end" ? "start" : "end");
@@ -122,16 +123,30 @@ internal static class Visuals
         foreach (var off in new[] { Vector3.Zero, new Vector3(1, 0, 0), new Vector3(0, 1, 0) }) { dummy.Pos.Add(d0 + off); dummy.Nrm.Add(Vector3.UnitZ); dummy.Uv.Add(Vector2.Zero); }
         dummy.Idx.AddRange([0u, 2u, 1u]);
 
-        int Mat(string key)
+        var imported = new Dictionary<string, int>();
+        int Mat(string section, string key)
         {
-            var path = cfg.Str("materials", key);
+            var path = cfg.Str(section, key);
             if (path.Length == 0) return 0;
+            if (imported.TryGetValue(path, out var known)) return known;
             var name = path[(path.LastIndexOf('/') + 1)..];
             int pkgImp = cell.AddImport("/Script/CoreUObject", "Package", 0, path);
-            return cell.AddImport("/Script/Engine", "MaterialInstanceConstant", pkgImp, name);
+            return imported[path] = cell.AddImport("/Script/Engine", "MaterialInstanceConstant", pkgImp, name);
         }
-        var mats = new List<int> { 0, Mat("terrain"), Mat("road"), Mat("posts"), Mat("gates") };
+        var mats = new List<int> { 0, Mat("materials", "terrain"), Mat("materials", "road"), Mat("materials", "posts"), Mat("materials", "gates") };
         var sections = new List<ProcMesh.Section> { dummy, terrain, road, posts, gates };
+        var sectionNames = new JsonArray("dummy", "terrain", "road", "posts", "gates");
+        if (objects is not null && cfg.Num("objects", "enabled") != 0)
+        {
+            var (objSecs, objRep) = VisualObjects.Build(ir, pl, cfg, objects, inPhysicsBounds);
+            foreach (var cls in VisualObjects.Classes.Where(c => objSecs[c].Idx.Count > 0))
+            {
+                sections.Add(objSecs[cls]); mats.Add(Mat("object_materials", cls)); sectionNames.Add($"objects:{cls}");
+            }
+            r["objects"] = objRep;
+        }
+        r["sections"] = sectionNames;
+        r["triangles_total"] = sections.Sum(s => s.Idx.Count / 3);
         var data = ProcMesh.BuildComponent(comp, sections, mats);
         r["component"] = $"{cell.ExportName(e)} of {cell.ExportName(cell.ExportOuter(e) - 1)} (export {e})";
 
@@ -174,7 +189,8 @@ internal static class Visuals
         r["export_bytes"] = $"{comp.Data.Length} -> {data.Length}";
         var (mn, mx) = ProcMesh.Bounds(sections.SelectMany(s => s.Pos));
         r["bounds_m"] = $"({mn.X / 100:0},{mn.Y / 100:0},{mn.Z / 100:0})..({mx.X / 100:0},{mx.Y / 100:0},{mx.Z / 100:0})";
-        Console.WriteLine($"visuals: terrain {r["terrain"]}, road {r["road"]}, {postCount} edge posts, export {r["export_bytes"]} bytes");
+        Console.WriteLine($"visuals: terrain {r["terrain"]}, road {r["road"]}, {postCount} edge posts, {sections.Count} sections, " +
+                          $"{r["triangles_total"]} triangles total{(r["objects"] is { } ob ? $" (objects {ob["triangles"]})" : "")}, export {r["export_bytes"]} bytes");
         return r;
     }
 
@@ -213,10 +229,13 @@ internal static class Visuals
         int p = c.Slots[3].at; int n = BitConverter.ToInt32(c.Data, p); p += 4;
         var secs = new List<ProcMesh.Section>();
         for (int i = 0; i < n; i++) secs.Add(ProcMesh.ReadSection(c.Data, ref p, out _));
-        C(n == 5 && secs.All(s => !s.Collision), $"visuals: {n} sections, none with collision ({string.Join(", ", secs.Select(s => $"{s.Pos.Count} v / {s.Idx.Count / 3} t"))})");
-        C(secs.All(s => s.Idx.All(i => i < s.Pos.Count)) && secs.All(s => s.Idx.Count % 3 == 0), "visuals: all indices in range");
+        C(n >= 5 && secs.All(s => !s.Collision), $"visuals: {n} sections, none with collision ({string.Join(", ", secs.Select(s => $"{s.Pos.Count} v / {s.Idx.Count / 3} t"))})");
+        C(secs.All(s => s.Idx.All(i => i < s.Pos.Count)) && secs.All(s => s.Idx.Count % 3 == 0 && s.Idx.Count > 0), "visuals: all indices in range, no empty section");
         var mats = c.Slots.TryGetValue(7, out var m) && !m.zero ? BitConverter.ToInt32(c.Data, m.at) : 0;
-        C(mats == 5, $"visuals: {mats} material slots (dummy, terrain = default, road, posts, gates)");
+        C(mats == n, $"visuals: {mats} material slots, one per section (dummy, terrain = default, road, posts, gates{(n > 5 ? ", object classes" : "")})");
+        long tris = secs.Sum(s => (long)s.Idx.Count / 3);
+        double budget = cfg.Num("objects", "max_total_triangles");
+        C(tris <= budget, $"visuals: {tris} triangles in total (budget {budget:0})");
 
         // posts: 20 vertices each, centred on a gate edge point
         double spacing = cfg.Num("markers", "spacing_m");
