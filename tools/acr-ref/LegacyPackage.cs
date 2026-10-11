@@ -133,6 +133,7 @@ internal sealed class LegacyPackage
     }
     public string ImportName(int i) => FNameAt(_imports[i], 20);
     public string ImportClassName(int i) => FNameAt(_imports[i], 8);
+    public string ImportClassPackage(int i) => FNameAt(_imports[i], 0);
     public int ImportOuter(int i) => BinaryPrimitives.ReadInt32LittleEndian(_imports[i].AsSpan(16));
     public byte[] ImportEntry(int i) => _imports[i];
 

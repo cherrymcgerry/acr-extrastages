@@ -222,7 +222,7 @@ internal static class BakedEdit
         return (list, countAt, p);
     }
 
-    static byte[] BuildCollider(byte[] d, Collider reference, List<Vector3> verts, uint[] tris)
+    internal static byte[] BuildCollider(byte[] d, Collider reference, IReadOnlyList<Vector3> verts, IReadOnlyList<uint> tris, int? physMaterial = null)
     {
         using var ms = new MemoryStream();
         using var w = new BinaryWriter(ms);
@@ -238,9 +238,9 @@ internal static class BakedEdit
         int colorsAt = reference.PositionsAt + 4 + reference.Positions.Length * 4;
         int colorsLen = 4 + BitConverter.ToInt32(d, colorsAt) * 4;
         w.Write(d, colorsAt, colorsLen);
-        w.Write(tris.Length);
+        w.Write(tris.Count);
         foreach (var t in tris) w.Write(t);
-        w.Write(reference.PhysMaterial);
+        w.Write(physMaterial ?? reference.PhysMaterial);
         w.Write(d, reference.OwnerAt, reference.End - reference.OwnerAt);
         return ms.ToArray();
     }

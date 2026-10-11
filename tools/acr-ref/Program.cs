@@ -35,6 +35,9 @@ internal static class Program
                 "xref" => Xref.Run(opts),
                 "schema" => Schema.Run(opts),
                 "stage-selftest" => StageSelfTest.Run(opts),
+                "stage-build" => StageBuild.Run(opts),
+                "stage-check" => StageBuild.RunCheck(opts),
+                "stage-verify" => StageVerify.Run(opts),
                 _ => Fail($"unknown command '{args[0]}'"),
             };
         }
@@ -63,6 +66,13 @@ internal static class Program
                               [--width 5 --length 8 --rise 1 --sink 0.05] --out <dir>
                               appends an always-active ramp collider (physics space: metres, Y up)
 
+        DR2 stage port (host: Hafren South forward; see docs/decisions.md D6, mods/acrdirt-stage/build.ps1):
+          acr-ref stage-build    --ir <work/ir/stage> --legacy <retoc legacy root> --out <mod root> [--report f.json] [--keep-pacenotes 1]
+          acr-ref stage-check    --ir <dir> --legacy <root> --report <f.json> [--out file]   offline collision/raycast/spline checks
+          acr-ref stage-verify   --ir <dir> --game <dir with Paks incl. the built container> [--out file]   CUE4Parse re-read
+          acr-ref stage-selftest --legacy <root>   byte-exact round trips of the host packages
+          acr-ref schema <Type>...                 usmap property indices (unversioned serialization order)
+
         binary analysis:
           acr-ref xref <string>... [--callers-of <va,...>] [--exe acr.exe] [--fields 0x349,0x350] [--out file.txt]
                               disassembles functions that reference the strings, marking struct-offset accesses
@@ -81,7 +91,7 @@ internal static class Program
         return 1;
     }
 
-    static DefaultFileProvider Open(Options o)
+    internal static DefaultFileProvider Open(Options o)
     {
         var oodle = Path.Combine(AppContext.BaseDirectory, OodleHelper.OODLE_NAME_CURRENT);
         if (!File.Exists(oodle) && !OodleHelper.DownloadOodleDll(ref oodle))

@@ -76,8 +76,21 @@ if ($Verify) {
     New-Item -ItemType Directory -Force $checkPaks | Out-Null
     Copy-Item (Join-Path $paks 'global.*') $checkPaks
     Copy-Item (Join-Path $dist "zz_acrdirt_$($Short)_P.*") $checkPaks
-    Run $acrRef stage-verify --game $check --ir $ir --report (Join-Path $work "stage-$Short.report.json") --out (Join-Path $check 'verify.txt')
-    Get-Content (Join-Path $check 'verify.txt')
+    # 1) what the game's reader sees: CUE4Parse over all game containers (hard links, read-only use) + the built one,
+    #    so imports into other containers (physical materials) resolve
+    $full = Join-Path $check 'full\acr\Content\Paks'
+    New-Item -ItemType Directory -Force $full | Out-Null
+    Get-ChildItem $paks -File | ? { $_.Extension -in '.utoc', '.ucas', '.pak', '.sig' } | % {
+        New-Item -ItemType HardLink -Path (Join-Path $full $_.Name) -Target $_.FullName | Out-Null
+    }
+    Copy-Item (Join-Path $dist "zz_acrdirt_$($Short)_P.*") $full
+    Run $acrRef stage-verify --game (Join-Path $check 'full') --ir $ir --out (Join-Path $check 'verify-cue4parse.txt')
+    Get-Content (Join-Path $check 'verify-cue4parse.txt')
+    # 2) byte-level: convert the shipped container back to legacy and re-run the offline checks (collision, raycast, splines)
+    $rt = Join-Path $check 'roundtrip'
+    Run $Retoc to-legacy --version UE5_6 --no-shaders $checkPaks $rt
+    Run $acrRef stage-check --legacy $rt --ir $ir --report (Join-Path $work "stage-$Short.report.json") --out (Join-Path $check 'verify-roundtrip.txt')
+    Get-Content (Join-Path $check 'verify-roundtrip.txt')
 }
 
 Get-ChildItem $dist "zz_acrdirt_$($Short)_P.*" | Format-Table Name, Length
