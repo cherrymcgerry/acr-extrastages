@@ -20,10 +20,15 @@
 .PARAMETER Version  v1 = ground only, empty pacenotes, RespawnPlanes root moved (as first shipped);
                     v1.1 = v1 + render-only visuals (DR2 ground, edge posts, start/finish gates; config/visuals.toml)
                            and the DR2 ground lowered 47 m to the host terrain's mean (-> work\acr\dist-v1.1)
+                    v1.2 = v1.1, but the start trigger's MeshComponent points at the end trigger's ring, so the native
+                           trigger code no longer hides/rebuilds the visuals mesh (-> work\acr\dist-v1.2)
                     v2 = + object collision, pacenotes, respawn walls re-laid (default)
-.PARAMETER GroundOffset  metres added to the DR2 placement height (default -47 for v1.1, 0 otherwise)
-.PARAMETER NoVisuals  v1.1 without the visuals
-.PARAMETER Out      output folder for the container (default work\acr\dist for v1, work\acr\dist-v2 for v2)
+.PARAMETER GroundOffset  metres added to the DR2 placement height (default -47 for v1.1/v1.2, 0 otherwise)
+.PARAMETER NoVisuals  v1.1/v1.2 without the visuals
+.PARAMETER VisualsHost / VisualsOwner / NoRetarget  v1.2 placement of the visuals mesh (docs/decisions.md D6):
+                    host trigger start|end, re-parent to an actor (e.g. SplinesActor), keep the trigger's own reference
+.PARAMETER Out      output folder for the container (default work\acr\dist for v1, work\acr\dist-<Version> otherwise)
+.PARAMETER Tag      name for the intermediate mod folder, report and check folder (default <Short>-<Version>)
 .PARAMETER Respawn  override the respawn mode: root (v1), sink (all walls 1 km down), relay (v2)
 .PARAMETER NoObjects / NoPacenotes  v2 without object collision / with the emptied pacenote table
 .PARAMETER ExtractOnly  only extract the host packages to work\acr\legacy
@@ -32,10 +37,14 @@
 param(
     [string]$Stage = 'new_zealand_rally_01_route_5',
     [string]$Short = 'nz01r5',
-    [ValidateSet('v1', 'v1.1', 'v2')][string]$Version = 'v2',
+    [ValidateSet('v1', 'v1.1', 'v1.2', 'v2')][string]$Version = 'v2',
     [double]$GroundOffset = [double]::NaN,
     [switch]$NoVisuals,
+    [ValidateSet('start', 'end')][string]$VisualsHost = 'start',
+    [string]$VisualsOwner,
+    [switch]$NoRetarget,
     [string]$Out,
+    [string]$Tag,
     [ValidateSet('', 'root', 'sink', 'relay')][string]$Respawn = '',
     [switch]$NoObjects,
     [switch]$NoPacenotes,
@@ -88,7 +97,7 @@ if ($ExtractOnly) { return }
 
 $ir = Join-Path $root "work\ir\$Stage"
 if (-not (Test-Path (Join-Path $ir 'stage.json'))) { throw "no stage IR at $ir (run dr2-extract stage-ir $Stage)" }
-$tag = if ($Version -eq 'v1') { $Short } else { "$Short-$Version" }
+$tag = if ($Tag) { $Tag } elseif ($Version -eq 'v1') { $Short } else { "$Short-$Version" }
 $mod = Join-Path $work "mod-$tag"
 $report = Join-Path $work "stage-$tag.report.json"
 $dist = if ($Out) { $Out } elseif ($Version -eq 'v1') { Join-Path $work 'dist' } else { Join-Path $work "dist-$Version" }
@@ -103,8 +112,12 @@ if ($Version -eq 'v2') {
     if (-not $NoPacenotes -and -not $KeepPacenotes) { $sbArgs += @('--pacenote-map', (Join-Path $root 'config\pacenote-map.toml')) }
     if (-not $Respawn) { $Respawn = 'relay' }
 }
-if ($Version -eq 'v1.1' -and -not $NoVisuals) { $sbArgs += @('--visuals', (Join-Path $root 'config\visuals.toml')) }
-if ([double]::IsNaN($GroundOffset)) { $GroundOffset = if ($Version -eq 'v1.1') { -47 } else { 0 } }
+if ($Version -in 'v1.1', 'v1.2' -and -not $NoVisuals) {
+    $sbArgs += @('--visuals', (Join-Path $root 'config\visuals.toml'), '--visuals-host', $VisualsHost,
+                 '--visuals-retarget', $(if ($Version -eq 'v1.1' -or $NoRetarget) { '0' } else { '1' }))
+    if ($VisualsOwner) { $sbArgs += @('--visuals-owner', $VisualsOwner) }
+}
+if ([double]::IsNaN($GroundOffset)) { $GroundOffset = if ($Version -in 'v1.1', 'v1.2') { -47 } else { 0 } }
 if ($GroundOffset -ne 0) { $sbArgs += @('--ground-offset', $GroundOffset.ToString([Globalization.CultureInfo]::InvariantCulture)) }
 if ($Respawn) { $sbArgs += @('--respawn', $Respawn) }
 Run $acrRef @sbArgs

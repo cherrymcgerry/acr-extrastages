@@ -239,6 +239,37 @@ Offline verification (stage-verify plus a CUE4Parse re-read of the shipped conta
 - 488 posts, each centred on its IR gate edge within 1 cm;
 - ground covering the centreline.
 
+**v1.1 result (in game):** the car drives, but none of the geometry is visible in gameplay. During loading a grey
+track was briefly visible, so the mesh does render, then disappears when gameplay starts. See the v1.2 section below.
+
 A stage-validate re-check of the v1 run (`work\validate\nz01r5-run1.csv`) now passes fall-through. The s = 108 m
 event was the car resting 0.71 m above lower DR2 terrain 8.7 m left of the road, not a fall. Samples resting within
 2 m of DR2 ground no longer count as "below-road".
+
+## v1.2 test: visuals that stay visible in gameplay
+
+v1.1 put the geometry on the start trigger's own ProceduralMeshComponent. That component is the trigger's
+`MeshComponent`, which the native `StartEndSequenceTrigger` code drives at runtime (it holds a Default and a Triggered
+material for it). The cause is suspected, not verified: the native code is not readable statically, and the Blueprints
+contain no script.
+
+v1.2 keeps the same geometry on the same component but points the start trigger's `MeshComponent` property at the end
+trigger's small ring. The native code then hides, rebuilds or recolours that ring, and the visuals component is
+referenced by nothing. Collision, placement (DR2 lowered 47 m) and materials are unchanged from v1.1.
+
+Install `work\acr\dist-v1.2\zz_acrdirt_nz01r5_P.*` only (same container name: remove v1/v1.1/v2 first).
+Build: `.\mods\acrdirt-stage\build.ps1 -Version v1.2 -Verify` (offline: 30 PASS / 0 FAIL in direct and round-trip
+checks). Sizes: ucas 297,359,632, utoc 55,503, pak 347.
+
+Check:
+1. During loading and after the countdown: the grey ground, the light-blue road, the magenta edge posts every 15 m
+   and the green start gate are visible, and they stay visible while you drive.
+2. The stage timer still starts at the start line and stops at the finish. The triggers' detection uses their box
+   and spline locations, not the mesh, but report it if timing breaks.
+3. Note how far along the stage the geometry stays visible, and the frame rate.
+
+If the geometry still vanishes, test the ordered set in `work\acr\visual-bisect\TESTS.md`:
+- **C (`C-splinesactor`):** additionally re-parents the visuals component to the `SplinesActor`, for the case where
+  the trigger actor itself is hidden at race start. This is a structural package change: if the stage fails to load,
+  report it.
+- **B (`B-end-trigger`):** visuals on the end trigger's own mesh, nothing retargeted (diagnostic).

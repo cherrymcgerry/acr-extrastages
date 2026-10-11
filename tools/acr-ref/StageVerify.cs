@@ -87,7 +87,8 @@ internal static class StageVerify
         var reparam = centre.SelectToken("Properties.SplineCurves.ReparamTable.Points") as JArray;
         double len = reparam?.Last?["InVal"]?.Value<double>() / 100 ?? 0;
         C(pts == ir.Centre.Count, $"CenterSpline via CUE4Parse: {pts} points, {len:0.#} m (HUD route length; DR2 total {ir.TotalM:0.#} m)");
-        var startMesh = cell.Single(e => e.ExportType == "ProceduralMeshComponent" && e.Outer?.Name.ToString().StartsWith("BC_StartSequenceTrigger_C") == true);
+        var startMesh = cell.Where(e => e.ExportType == "ProceduralMeshComponent")
+            .MaxBy(e => e.GetOrDefault<UScriptArray>("ProcMeshSections")?.Properties.Count ?? 0)!;
         var secs = startMesh.GetOrDefault<UScriptArray>("ProcMeshSections");
         var mats = startMesh.GetOrDefault<UScriptArray>("OverrideMaterials");
         var matJson = mats is null ? "" : JsonConvert.SerializeObject(mats);
@@ -95,7 +96,13 @@ internal static class StageVerify
         {
             var counts = secs.Properties.OfType<StructProperty>().Select(sp => (sp.Value?.StructType as FStructFallback)?.GetOrDefault<UScriptArray>("ProcVertexBuffer")?.Properties.Count ?? 0).ToList();
             C(counts.Count == 5 && counts.Skip(1).All(c => c > 0) && mats?.Properties.Count == 5 && !startMesh.GetOrDefault<bool>("bHiddenInGame"),
-              $"visuals via CUE4Parse: start-trigger mesh {counts.Count} sections ({string.Join(", ", counts)} vertices), {mats?.Properties.Count ?? 0} material slots ({string.Join(", ", System.Text.RegularExpressions.Regex.Matches(matJson, @"MI_\w+").Select(m => m.Value).Distinct())}), not hidden in game");
+              $"visuals via CUE4Parse: mesh of {startMesh.Outer?.Name} {counts.Count} sections ({string.Join(", ", counts)} vertices), {mats?.Properties.Count ?? 0} material slots ({string.Join(", ", System.Text.RegularExpressions.Regex.Matches(matJson, @"MI_\w+").Select(m => m.Value).Distinct())}), not hidden in game");
+            foreach (var trig in cell.Where(e => e.ExportType is "BC_StartSequenceTrigger_C" or "BC_EndSequenceTrigger_C"))
+            {
+                var mc = trig.GetOrDefault<CUE4Parse.UE4.Objects.UObject.FPackageIndex>("MeshComponent");
+                var target = mc?.ResolvedObject;
+                w.WriteLine($"     {trig.ExportType}.MeshComponent -> {target?.Outer?.Name}.{target?.Name} ({(target?.Name.ToString() == startMesh.Name && target?.Outer?.Name.ToString() == startMesh.Outer?.Name.ToString() ? "the visuals mesh" : "a ring")})");
+            }
         }
         foreach (var name in new[] { "RaceSector", "BC_StartSequenceTrigger_C", "BC_EndSequenceTrigger_C", "BC_CompleStartTargetPoint_C" })
             foreach (var a in cell.Where(e => e.ExportType == name))

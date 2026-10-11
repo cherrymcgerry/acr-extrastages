@@ -193,9 +193,23 @@ First stage: `new_zealand_rally_01_route_5` → `zz_acrdirt_nz01r5_P`. Built by 
     present, and need no textures.
   - Config: `config/visuals.toml`. Size: the start-trigger export grows from 1.7 kB to 67.8 MB (390 k
     terrain and 167 k road vertices). Car physics still comes only from BakedData.
-  - Risks: native trigger code could hide or rebuild the mesh at runtime. The gameplay cell loads for variant 1/2,
-    and the route was placed inside its content bounds plus the 640 m loading range (297 m margin). Whether
-    the cell actually stays streamed in around the whole route is still inferred.
+  - Risks: native trigger code could hide or rebuild the mesh at runtime. The gameplay cell is not spatially loaded
+    (data-layer gated only), so it stays loaded for the whole variant.
+- **v1.1 in game, and the v1.2 fix:**
+  - [V] v1.1's mesh renders while loading and is gone in gameplay.
+  - [V] `BC_StartSequenceTrigger`, `BC_EndSequenceTrigger` and their parent `BC_StartEndSequenceTrigger` contain no
+    script. Their parent is the native `StartEndSequenceTrigger` (properties MeshComponent, DefaultMaterial,
+    TriggeredMaterial, MaxTriggerAngle), so the native code owns the mesh.
+  - [I] That native code hides, clears or rebuilds its MeshComponent when gameplay starts.
+  - [V] The forward cell is not spatially loaded (data-layer gated only), so it does not stream out during the stage.
+  - v1.2 points the start trigger's serialized `MeshComponent` reference, and its CreateBeforeSerialization preload
+    dependency, at the end trigger's ring. Both triggers then drive that ring, and nothing references the visuals
+    component.
+  - Fallbacks: `-VisualsOwner SplinesActor` re-parents the component (outer, flags, CreateBeforeCreate dependency,
+    AttachParent → SplinesActor Root); `-VisualsHost end -NoRetarget` is diagnostic only.
+  - [V offline] Both survive retoc's zen round trip, and CUE4Parse resolves the new owners and references.
+  - Rejected: the respawn walls (hidden overlap triggers that respawn needs), and the 2 baked cable meshes in cell
+    `1HVWF…` (spatially loaded, so they would stream out).
 - **Real DR2 visuals: assessment [inferred, not implemented]:**
   - **Geometry without the editor is feasible** if v1.1 renders. ProcMeshSections take arbitrary vertices, normals,
     tangents, UV0–3 and colours, so DR2 terrain tiles and object glb meshes can be baked in with their own UVs.

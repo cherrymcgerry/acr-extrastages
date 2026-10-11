@@ -43,6 +43,7 @@ internal static class Program
                 "height-survey" => HeightSurvey.Run(opts),
                 "ground-at" => HeightSurvey.GroundAt(opts),
                 "procmesh-probe" => ProcMesh.Probe(opts),
+                "export-info" => ExportInfo(opts),
                 _ => Fail($"unknown command '{args[0]}'"),
             };
         }
@@ -186,6 +187,21 @@ internal static class Program
         }
         Console.WriteLine($"exported {ok}, failed {bad} -> {o.Out}");
         return bad == 0 ? 0 : 3;
+    }
+
+    static int ExportInfo(Options o)
+    {
+        if (o.Positional.Count != 1 || o.Filter is null) return Fail("export-info needs a legacy .uasset and --filter <regex on name|class>");
+        var pkg = new LegacyPackage(o.Positional[0]);
+        var re = new Regex(o.Filter);
+        string Ref(int i) => i > 0 ? $"{pkg.ExportName(i - 1)}#{i - 1}" : i < 0 ? $"import:{pkg.ImportName(-i - 1)}" : "null";
+        for (int e = 0; e < pkg.ExportCount; e++)
+        {
+            if (!re.IsMatch(pkg.ExportName(e)) && !re.IsMatch(pkg.ExportClass(e))) continue;
+            Console.WriteLine($"#{e} {pkg.ExportName(e)} ({pkg.ExportClass(e)}) outer {Ref(pkg.ExportOuter(e))} flags 0x{pkg.ExportFlags(e):X} {pkg.GetExportData(e).Length} bytes");
+            foreach (var (kind, _, index) in pkg.ExportDeps(e)) Console.WriteLine($"    {kind} {Ref(index)}");
+        }
+        return 0;
     }
 
     static int PatchF32(Options o)

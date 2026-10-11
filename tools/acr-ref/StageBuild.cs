@@ -119,6 +119,13 @@ internal static class StageBuild
             ["objects"] = objectsCfg, ["pacenote_map"] = pacenoteMap, ["respawn"] = respawnMode, ["keep_pacenotes"] = keepPacenotes,
             ["visuals"] = o.Named.GetValueOrDefault("visuals"), ["ground_offset_m"] = groundOffset,
         };
+        if (o.Named.ContainsKey("visuals"))
+        {
+            var vo = Visuals.Options.From(o.Named);
+            report["options"]!["visuals_host"] = vo.Host;
+            report["options"]!["visuals_retarget"] = vo.Retarget;
+            report["options"]!["visuals_owner"] = vo.Owner;
+        }
         var road = Road(ir, pl);
 
         // Kunos' track physics only knows the surfaces listed in DA_PhysMaterialsMappingCommon; a collider whose physical
@@ -596,7 +603,7 @@ internal static class StageBuild
             r["respawn"] = Respawn.Relay(cell, objs, contour, road, sinkAll: respawnMode == "sink");
             actors.Add($"respawn walls ({respawnMode}): {r["respawn"]!.ToJsonString()}");
         }
-        if (o.Named.GetValueOrDefault("visuals") is { } visualsCfg) r["visuals"] = Visuals.Build(cell, ir, pl, Toml.Load(visualsCfg));
+        if (o.Named.GetValueOrDefault("visuals") is { } visualsCfg) r["visuals"] = Visuals.Build(cell, ir, pl, Toml.Load(visualsCfg), Visuals.Options.From(o.Named));
         r["actors"] = actors;
         r["dr2_centre_length_m"] = newLine.Length / 100;
         foreach (var a in actors) Console.WriteLine($"  {a}");
@@ -746,7 +753,12 @@ internal static class StageBuild
         C(lenHits == 1, $"DT_TracksVariants: Hafren South forward row Length = {F(km)} km (DR2 length_m {F(ir.LengthM, "0.#")})");
 
         if (report["options"]?["visuals"]?.GetValue<string>() is { } visualsCfg)
-            failures += Visuals.Check(new LegacyPackage(HostPaths.Resolve(root, HostPaths.Cell)), ir, pl, Toml.Load(visualsCfg), w);
+        {
+            var vo = report["options"]!;
+            var opt = new Visuals.Options(vo["visuals_host"]?.GetValue<string>() ?? "start",
+                vo["visuals_retarget"]?.GetValue<bool>() ?? false, vo["visuals_owner"]?.GetValue<string>());
+            failures += Visuals.Check(new LegacyPackage(HostPaths.Resolve(root, HostPaths.Cell)), ir, pl, Toml.Load(visualsCfg), opt, w);
+        }
 
         var bpath = HostPaths.Resolve(root, HostPaths.Baked);
         _ = new LegacyPackage(bpath);

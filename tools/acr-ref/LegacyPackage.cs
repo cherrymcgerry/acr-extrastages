@@ -132,6 +132,32 @@ internal sealed class LegacyPackage
         int c = BinaryPrimitives.ReadInt32LittleEndian(_exports[e].AsSpan(0));
         return c < 0 ? ImportName(-c - 1) : c > 0 ? ExportName(c - 1) : "";
     }
+    public void SetExportOuter(int e, int outer) => BinaryPrimitives.WriteInt32LittleEndian(_exports[e].AsSpan(12), outer);
+    public uint ExportFlags(int e) => BinaryPrimitives.ReadUInt32LittleEndian(_exports[e].AsSpan(24));
+    public void SetExportFlags(int e, uint flags) => BinaryPrimitives.WriteUInt32LittleEndian(_exports[e].AsSpan(24), flags);
+
+    /// Preload dependencies of an export: (kind, header position, package index). Kinds in the order of the export map's
+    /// counts: SerializationBeforeSerialization, CreateBeforeSerialization, SerializationBeforeCreate, CreateBeforeCreate.
+    public List<(string kind, int pos, int index)> ExportDeps(int e)
+    {
+        int first = BinaryPrimitives.ReadInt32LittleEndian(_exports[e].AsSpan(76));
+        var res = new List<(string, int, int)>();
+        if (first < 0) return res;
+        int at = BinaryPrimitives.ReadInt32LittleEndian(_header.AsSpan(_fieldPos["PreloadDependencyOffset"])) + first * 4;
+        string[] kinds = ["SBS", "CBS", "SBC", "CBC"];
+        for (int k = 0; k < 4; k++)
+            for (int n = BinaryPrimitives.ReadInt32LittleEndian(_exports[e].AsSpan(80 + k * 4)); n > 0; n--, at += 4)
+                res.Add((kinds[k], at, BinaryPrimitives.ReadInt32LittleEndian(_header.AsSpan(at))));
+        return res;
+    }
+
+    /// Rewrites one preload dependency in place (positions come from ExportDeps; the region is copied verbatim on save).
+    public void SetDep(int pos, int index)
+    {
+        if (pos < _exportsEnd || pos + 4 > _totalHeaderSize) throw new ArgumentOutOfRangeException(nameof(pos));
+        BinaryPrimitives.WriteInt32LittleEndian(_header.AsSpan(pos), index);
+    }
+
     public string ImportName(int i) => FNameAt(_imports[i], 20);
     public string ImportClassName(int i) => FNameAt(_imports[i], 8);
     public string ImportClassPackage(int i) => FNameAt(_imports[i], 0);

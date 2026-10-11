@@ -9,13 +9,48 @@ namespace AcrRef;
 /// Sections: 0 hidden dummy (keeps slot 0 for any runtime SetMaterial(0)), 1 terrain, 2 road, 3 edge posts, 4 gates.
 internal static class Visuals
 {
-    public static JsonObject Build(LegacyPackage cell, StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg)
+    const uint RfDefaultSubObject = 0x40000;
+
+    /// Where the geometry goes. v1.1 used the start trigger's own mesh, which renders during loading but is gone in
+    /// gameplay: the native StartEndSequenceTrigger drives its MeshComponent (Default/TriggeredMaterial) at runtime.
+    ///   host:     trigger whose ProceduralMeshComponent carries the geometry (start | end)
+    ///   retarget: that trigger's MeshComponent property is pointed at the other trigger's ring, so the native code no
+    ///             longer touches the visuals component
+    ///   owner:    re-parent the visuals component to this actor (export name prefix, e.g. SplinesActor) and attach it
+    ///             to its root, so actor-level hiding of the trigger does not apply either
+    internal sealed record Options(string Host, bool Retarget, string? Owner)
+    {
+        public static Options From(IReadOnlyDictionary<string, string> named) => new(
+            named.GetValueOrDefault("visuals-host", "start"),
+            named.GetValueOrDefault("visuals-retarget", "1") != "0",
+            named.GetValueOrDefault("visuals-owner") is { Length: > 0 } ow ? ow : null);
+    }
+
+    // by name: a round trip without the Blueprint containers cannot resolve the class imports
+    static int TriggerActor(LegacyPackage cell, string host) => Enumerable.Range(0, cell.ExportCount).Single(i =>
+        cell.ExportName(i).StartsWith(host == "end" ? "BC_EndSequenceTrigger_C_" : "BC_StartSequenceTrigger_C_") && cell.ExportOuter(i) > 0
+        && cell.ExportName(cell.ExportOuter(i) - 1) == "PersistentLevel");
+
+    /// The trigger's own MeshComponent export (by name, since the visuals one may have been re-parented).
+    static int TriggerMesh(LegacyPackage cell, int actor) => Enumerable.Range(0, cell.ExportCount).Single(i =>
+        cell.ExportClass(i) == "ProceduralMeshComponent" && cell.ExportName(i) == "MeshComponent" &&
+        cell.ExportDeps(i).Any(d => d.kind == "CBC" && d.index == actor + 1));
+
+    static int Unique(byte[] d, int value)
+    {
+        var hits = new List<int>();
+        for (int p = 0; p + 4 <= d.Length; p++) if (BitConverter.ToInt32(d, p) == value) hits.Add(p);
+        if (hits.Count != 1) throw new InvalidDataException($"package index {value} found {hits.Count} times in the actor data");
+        return hits[0];
+    }
+
+    public static JsonObject Build(LegacyPackage cell, StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, Options opt)
     {
         var r = new JsonObject();
-        int e = Enumerable.Range(0, cell.ExportCount).Single(i => cell.ExportClass(i) == "ProceduralMeshComponent"
-            && cell.ExportOuter(i) > 0 && cell.ExportName(cell.ExportOuter(i) - 1).StartsWith("BC_StartSequenceTrigger_C"));
+        int hostActor = TriggerActor(cell, opt.Host), otherActor = TriggerActor(cell, opt.Host == "end" ? "start" : "end");
+        int e = TriggerMesh(cell, hostActor), other = TriggerMesh(cell, otherActor);
         var comp = ProcMesh.Parse(cell.GetExportData(e), e);
-        if (!ProcMesh.RoundTrips(comp, out var why)) throw new InvalidDataException($"start trigger mesh sections do not round trip: {why}");
+        if (!ProcMesh.RoundTrips(comp, out var why)) throw new InvalidDataException($"trigger mesh sections do not round trip: {why}");
 
         var roadCodes = cfg.Arr("road", "surfaces").Cast<string>().ToHashSet();
         Vector3 PhysToUe(double x, double y, double z) => new((float)(x * 100), (float)(z * 100), (float)(y * 100));
@@ -98,9 +133,38 @@ internal static class Visuals
         var mats = new List<int> { 0, Mat("terrain"), Mat("road"), Mat("posts"), Mat("gates") };
         var sections = new List<ProcMesh.Section> { dummy, terrain, road, posts, gates };
         var data = ProcMesh.BuildComponent(comp, sections, mats);
+        r["component"] = $"{cell.ExportName(e)} of {cell.ExportName(cell.ExportOuter(e) - 1)} (export {e})";
+
+        if (opt.Retarget)
+        {
+            // host trigger: MeshComponent -> the other trigger's ring (data and its CreateBeforeSerialization dependency)
+            var ad = (byte[])cell.GetExportData(hostActor).Clone();
+            BitConverter.GetBytes(other + 1).CopyTo(ad, Unique(ad, e + 1));
+            cell.SetExportData(hostActor, ad);
+            var dep = cell.ExportDeps(hostActor).Single(x => x.kind == "CBS" && x.index == e + 1);
+            cell.SetDep(dep.pos, other + 1);
+            r["retarget"] = $"{cell.ExportName(hostActor)}.MeshComponent -> export {other} ({cell.ExportName(otherActor)}'s ring)";
+        }
+        if (opt.Owner is { } ownerPrefix)
+        {
+            if (!opt.Retarget) throw new ArgumentException("--visuals-owner needs --visuals-retarget (the trigger would still reference the component)");
+            int owner = Enumerable.Range(0, cell.ExportCount).Single(i => cell.ExportName(i).StartsWith(ownerPrefix) && cell.ExportOuter(i) > 0
+                && cell.ExportName(cell.ExportOuter(i) - 1) == "PersistentLevel");
+            var root = cell.ExportDeps(owner).Where(x => x.kind == "CBS" && x.index > 0 && cell.ExportName(x.index - 1) == "Root").ToList();
+            if (root.Count != 1) throw new InvalidDataException($"{cell.ExportName(owner)}: no unique Root component");
+            int oldParent = BitConverter.ToInt32(data, ProcMesh.Parse(data, e).Slots[124].at);
+            BitConverter.GetBytes(root[0].index).CopyTo(data, ProcMesh.Parse(data, e).Slots[124].at);
+            foreach (var d in cell.ExportDeps(e))
+            {
+                if (d.kind == "CBC" && d.index == hostActor + 1) cell.SetDep(d.pos, owner + 1);
+                else if (d.kind == "CBS" && d.index == oldParent) cell.SetDep(d.pos, root[0].index);
+            }
+            cell.SetExportOuter(e, owner + 1);
+            cell.SetExportFlags(e, cell.ExportFlags(e) & ~RfDefaultSubObject);
+            r["owner"] = $"re-parented to {cell.ExportName(owner)}, attached to its Root (export {root[0].index - 1})";
+        }
         cell.SetExportData(e, data);
 
-        r["component"] = $"{cell.ExportName(e)} of {cell.ExportName(cell.ExportOuter(e) - 1)} (export {e})";
         r["terrain"] = $"{terrain.Pos.Count} vertices, {terrain.Idx.Count / 3} triangles";
         r["road"] = $"{road.Pos.Count} vertices, {road.Idx.Count / 3} triangles (codes {string.Join(", ", roadCodes)})";
         r["edge_posts"] = postCount;
@@ -115,14 +179,35 @@ internal static class Visuals
     }
 
     /// Offline check of the rebuilt component in a built (or round-tripped) cell.
-    public static int Check(LegacyPackage cell, StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, TextWriter w)
+    public static int Check(LegacyPackage cell, StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, Options opt, TextWriter w)
     {
         int failures = 0;
         void C(bool ok, string what) { w.WriteLine($"{(ok ? "PASS" : "FAIL")} {what}"); if (!ok) failures++; }
-        int e = Enumerable.Range(0, cell.ExportCount).Single(i => cell.ExportClass(i) == "ProceduralMeshComponent"
-            && cell.ExportOuter(i) > 0 && cell.ExportName(cell.ExportOuter(i) - 1).StartsWith("BC_StartSequenceTrigger_C"));
+        var pmcs = Enumerable.Range(0, cell.ExportCount).Where(i => cell.ExportClass(i) == "ProceduralMeshComponent").ToList();
+        int e = pmcs.MaxBy(i => cell.GetExportData(i).Length);
         var c = ProcMesh.Parse(cell.GetExportData(e), e);
-        C(c.PropsEnd + 8 == c.Data.Length, $"visuals: start-trigger mesh export parses to its end ({c.Data.Length} bytes)");
+        string outerName = cell.ExportName(cell.ExportOuter(e) - 1);
+        C(c.PropsEnd + 8 == c.Data.Length, $"visuals: mesh export {e} of {outerName} parses to its end ({c.Data.Length} bytes)");
+
+        // nothing that the native trigger code drives may reference the visuals component
+        int start = TriggerActor(cell, "start"), end = TriggerActor(cell, "end");
+        var refs = new[] { start, end }.Where(a =>
+            Enumerable.Range(0, cell.GetExportData(a).Length - 3).Any(p => BitConverter.ToInt32(cell.GetExportData(a), p) == e + 1)).ToList();
+        if (opt.Retarget)
+        {
+            var ring = pmcs.Single(i => i != e);
+            bool both = new[] { start, end }.All(a => cell.ExportDeps(a).Any(d => d.kind == "CBS" && d.index == ring + 1));
+            C(refs.Count == 0 && both, $"visuals: neither trigger's MeshComponent references the visuals component (both use export {ring})");
+        }
+        int ownerIdx = cell.ExportOuter(e) - 1;
+        if (opt.Owner is { } ow)
+            C(cell.ExportName(ownerIdx).StartsWith(ow) && (cell.ExportFlags(e) & RfDefaultSubObject) == 0
+              && cell.ExportDeps(e).Any(d => d.kind == "CBC" && d.index == ownerIdx + 1)
+              && cell.ExportName(BitConverter.ToInt32(c.Data, c.Slots[124].at) - 1) == "Root",
+              $"visuals: component owned by {cell.ExportName(ownerIdx)} (not a default subobject; created after it; attached to its Root)");
+        else
+            C(ownerIdx == TriggerActor(cell, opt.Host),
+              $"visuals: component owned by the {opt.Host} trigger ({outerName})");
         C(c.Slots.TryGetValue(142, out var hid) && hid.zero && c.Slots.ContainsKey(136) && c.Slots.ContainsKey(133),
           "visuals: bHiddenInGame = false, bVisible = true, absolute transform (world-space vertices)");
         int p = c.Slots[3].at; int n = BitConverter.ToInt32(c.Data, p); p += 4;
