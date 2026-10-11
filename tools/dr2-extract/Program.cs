@@ -33,6 +33,7 @@ internal static class Program
                 "pssg-info" => PssgCommands.Info(args[1..]),
                 "pssg-to-gltf" => PssgCommands.ToGltf(args[1..]),
                 "stage-ir" => await StageIr.Run(args[1..]),
+                "stage-textures" => await StageTextures.Run(args[1..]),
                 "catalog" => await CatalogCommand.Run(args[1..]),
                 "pacenote-survey" => await PacenoteSurvey.Run(args[1..]),
                 "route-map-check" => await RouteMapCheck.Run(args[1..]),

@@ -147,6 +147,56 @@ internal static class StageVerify
             C(ok, $"sky via CUE4Parse: {sky.Name}: {string.Join(", ", got.Select(g => $"{g.f} {g.v}"))}, Time of Day {sky.GetOrDefault<double>("Time of Day"):0.##} (unchanged)");
         }
 
+        if (o.Named.GetValueOrDefault("dr2-root") is { } dr2Root && secs is not null)
+        {
+            // v1.8: the DR2 MICs on the visuals mesh and their textures as the game's reader loads them
+            var paths = System.Text.RegularExpressions.Regex.Matches(matJson, $@"{System.Text.RegularExpressions.Regex.Escape(dr2Root)}/[\w/]+")
+                .Select(m => m.Value).Distinct().ToList();
+            var previews = o.Named.GetValueOrDefault("previews");
+            if (previews is not null)
+            {
+                Directory.CreateDirectory(previews);
+                foreach (var old in Directory.GetFiles(previews, "*.png")) File.Delete(old);
+            }
+            int micOk = 0, texOk = 0, png = 0; var bad = new List<string>(); var seen = new HashSet<string>();
+            foreach (var path in paths)
+            {
+                try
+                {
+                    var mic = p.LoadPackage("acr/Content" + path["/Game".Length..] + ".uasset").GetExports()
+                        .OfType<CUE4Parse.UE4.Assets.Exports.Material.UMaterialInstanceConstant>().Single();
+                    var parent = mic.Parent?.Load<CUE4Parse.UE4.Assets.Exports.Material.UMaterialInterface>();
+                    if (parent?.Name != "M_Simple") { bad.Add($"{path}: parent {parent?.Name ?? "unresolved"}"); continue; }
+                    bool ok = mic.TextureParameterValues.Length == 3;
+                    foreach (var tp in mic.TextureParameterValues)
+                    {
+                        var tex = tp.ParameterValue.Load<CUE4Parse.UE4.Assets.Exports.Texture.UTexture2D>();
+                        var pd = tex?.PlatformData;
+                        bool tOk = pd is not null && pd.Mips.Length > 0 && pd.VTData is null && tex!.GetOrDefault<bool>("NeverStream")
+                                   && pd.Mips.All(m => m.BulkData?.Data is { Length: > 0 });
+                        if (!tOk) { ok = false; bad.Add($"{path}: {tp.ParameterInfo.Name.Text} -> {tex?.GetPathName() ?? "unresolved"}"); continue; }
+                        if (!seen.Add(tex!.GetPathName())) continue;
+                        texOk++;
+                        // previews: base colour textures, decoded from what CUE4Parse read (mip <= 512 px)
+                        if (previews is null || tp.ParameterInfo.Name.Text != "Simple_BaseColor_Texture" || png >= 64) continue;
+                        var fmt = pd!.PixelFormat.ToString() switch { "PF_DXT1" => Dds.Fmt.BC1, "PF_DXT5" => Dds.Fmt.BC3, "PF_BC5" => Dds.Fmt.BC5, _ => (Dds.Fmt?)null };
+                        var mip = pd.Mips.FirstOrDefault(m => m.SizeX <= 512);
+                        if (fmt is null || mip is null) continue;
+                        var px = Dds.DecodeBlocks(fmt.Value, mip.BulkData!.Data!, mip.SizeX, mip.SizeY);
+                        for (int i = 3; i < px.Length; i += 4) px[i] = 255;
+                        Dds.WritePng(Path.Combine(previews, $"{tex.Name}_{mip.SizeX}x{mip.SizeY}.png"), mip.SizeX, mip.SizeY, px);
+                        png++;
+                    }
+                    if (ok) micOk++;
+                }
+                catch (Exception e) { bad.Add($"{path}: {e.GetType().Name} {e.Message}"); }
+            }
+            C(micOk == paths.Count && bad.Count == 0,
+              $"DR2 materials via CUE4Parse: {micOk} of {paths.Count} MICs load with parent M_Simple and 3 textures; {texOk} distinct textures load " +
+              $"(NeverStream, not virtual, every mip's data present){(previews is not null ? $"; {png} base colour previews -> {previews}" : "")}" +
+              (bad.Count > 0 ? $"; {string.Join("; ", bad.Take(5))}" : ""));
+        }
+
         w.WriteLine(failures == 0 ? "ALL PASS" : $"{failures} FAILURES");
         return failures == 0 ? 0 : 5;
     }

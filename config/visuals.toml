@@ -85,3 +85,31 @@ road_traj_along_m = 100
 road_color = [0, 128, 0, 10]    # RGBA vertex colour; Hafren's road vertices are R ~0, G 128, B 0, A mostly < 20
 road_follow_max_m = 15          # road-surface triangles further from the DR2 centreline (side roads) get world-planar UVs
 road_stretch_min_fraction = 0.95  # offline check: road triangles whose UV0 scale is within 1.5x of nominal
+
+[dr2_textures]
+# only with stage-build --visuals-dr2 1 (build.ps1 v1.8, on top of [textured]): DR2's own textures (dr2-extract
+# stage-textures -> work/ir/<stage>/textures) as new Texture2D + MaterialInstanceConstant packages under package_root.
+# --visuals-dr2-revert terrain,road,vista,objects (build.ps1 -Dr2Revert) keeps those sections on their v1.7 material.
+package_root = "/Game/AcrDirt/Dr2Tex/nz01r5"
+# templates (acr-ref tex-scan / mic-scan): NeverStream, every mip inline in the export, not virtual
+texture_template = "/Game/Materials/PhotoMode/Textures/T_Dirt"        # sRGB, PF_DXT1 4096x2048, 13 mips
+linear_template = "/Game/Effects/Vehicles/Skid/T_SkidDebug_N"          # linear (flat ORM, flat normal)
+mic_template = "/Game/Environments/MonteCarloS2Sisteron/TileableMaterials/MI_SisteronConcrete01"   # parent M_Simple
+mic_base_texture = "T_ConcreteWalkway_C"      # the template's Simple_BaseColor_Texture
+mic_orm_texture = "T_ConcreteWalkway_L"       #   Simple_OcclRoughMet_Texture -> flat orm
+mic_normal_texture = "T_ConcreteWalkway_N"    #   Simple_Normal_Texture -> flat (BC5 128, 128)
+orm = [255, 217, 0]             # occlusion 1, roughness 0.85, metal 0 (ACR _L textures: R occlusion, G roughness, B metal)
+max_size = 2048                 # mips larger than this are dropped
+# DR2's terrain colour maps (nz_01_a_0x_d, section_b) are grey-centred tints over a 17-slice detail array blended per
+# vertex; M_Simple takes one texture, so the ground uses array slices as tiling textures
+terrain = "nz_ral_set_1_01_d1049518591_slice4"   # grass
+terrain_tile_m = 8                                # DR2's detail UV1 on the terrain is ~8 m per unit
+road = "nz_ral_set_1_01_d1049518591_slice2"      # road strip: gravel with grass verges, edge to edge across U
+# vista: large colour map (tint) x 2 over the three layers' mean colours mixed by the blend map, baked
+vista_colour_map = "nz_ral_master_vista_cm"
+vista_blend_map = "nz_ral_master_vista_mk"
+vista_layers = ["nz_ral_vista_grass_d", "nz_ral_vista_road_d", "nz_ral_vista_forest_d"]
+vista_size = 2048
+# objects: render-mesh instances by DR2 material (TDiffuse*); these shaders are alpha-tested or blended (no masked
+# parent: M_Simple is opaque), their triangles keep the class colour
+object_skip_shaders = ["foliage", "decal", "blend", "glass", "water", "shadow"]

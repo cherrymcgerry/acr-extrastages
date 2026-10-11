@@ -38,9 +38,13 @@
                     v1.7 = v1.6 with Hafren's terrain and gravel road materials on the ground sections, road UVs
                            following the DR2 centreline in Hafren's road layout, the vista in the terrain material
                            ([textured] in config/visuals.toml), and the sky at Hawke's Bay (-Sky) (-> work\acr\dist-v1.7)
+                    v1.8 = v1.7 with DR2's own textures on the ground, road, vista and objects ([dr2_textures] in
+                           config/visuals.toml: new Texture2D + MaterialInstanceConstant packages under
+                           /Game/AcrDirt/Dr2Tex, parent M_Simple) (-> work\acr\dist-v1.8)
                     v2 = + object collision, pacenotes, respawn walls re-laid (default)
 .PARAMETER Sky      v1.7: nz (default; the placed sky's location and date set to Hawke's Bay, config/sky.toml) | host
                     (Hafren's sky as shipped)
+.PARAMETER Dr2Revert  v1.8: comma-separated sections kept on their v1.7 material (terrain, road, vista, objects)
 .PARAMETER Vegetation  v1.4+: none (default) | crowns (small tree crowns high up, clear of the road)
 .PARAMETER GroundOffset  metres added to the DR2 placement height (default -47 for v1.1+, 0 otherwise)
 .PARAMETER NoVisuals  v1.1+ without the visuals
@@ -57,8 +61,9 @@
 param(
     [string]$Stage = 'new_zealand_rally_01_route_5',
     [string]$Short = 'nz01r5',
-    [ValidateSet('v1', 'v1.1', 'v1.2', 'v1.3', 'v1.4', 'v1.5', 'v1.6', 'v1.7', 'v2')][string]$Version = 'v2',
+    [ValidateSet('v1', 'v1.1', 'v1.2', 'v1.3', 'v1.4', 'v1.5', 'v1.6', 'v1.7', 'v1.8', 'v2')][string]$Version = 'v2',
     [ValidateSet('nz', 'host')][string]$Sky = 'nz',
+    [ValidateSet('terrain', 'road', 'vista', 'objects')][string[]]$Dr2Revert = @(),
     [ValidateSet('none', 'crowns')][string]$Vegetation = 'none',
     [double]$GroundOffset = [double]::NaN,
     [switch]$NoVisuals,
@@ -99,6 +104,9 @@ $host_ = @{
     pacenote   = 'acr\Content\Data\Pacenote\Tables\DT_PacenoteHafrenSouthForward'
     persistent = 'acr\Content\Levels\WalesS4HafrenSouth'                          # v1.6: scenery cells and actors
     strings    = 'acr\Content\Data\Localization\ContentTexts\ST_Track'            # v1.6: menu / HUD names
+    tex_srgb   = 'acr\Content\Materials\PhotoMode\Textures\T_Dirt'                # v1.8: texture templates (not shipped)
+    tex_linear = 'acr\Content\Effects\Vehicles\Skid\T_SkidDebug_N'
+    mic_tpl    = 'acr\Content\Environments\MonteCarloS2Sisteron\TileableMaterials\MI_SisteronConcrete01'
 }
 # retoc filters on the file name; the persistent level's bare name would also match all of its cells
 $filter = @{ persistent = 'WalesS4HafrenSouth.umap' }
@@ -135,29 +143,30 @@ if ($Version -ne 'v1' -and (Resolve-Path -LiteralPath $dist -ErrorAction Silentl
 Remove-Item -Recurse -Force $mod -ErrorAction SilentlyContinue
 $sbArgs = @('stage-build', '--ir', $ir, '--legacy', $legacy, '--out', $mod, '--report', $report, '--surface-registry', $registry)
 if ($KeepPacenotes) { $sbArgs += @('--keep-pacenotes', '1') }
-if ($Version -in 'v2', 'v1.3', 'v1.4', 'v1.5', 'v1.6', 'v1.7') {
+if ($Version -in 'v2', 'v1.3', 'v1.4', 'v1.5', 'v1.6', 'v1.7', 'v1.8') {
     if (-not $NoObjects) { $sbArgs += @('--objects', (Join-Path $root 'config\object-collision.toml')) }
     if (-not $NoPacenotes -and -not $KeepPacenotes) {
         $sbArgs += @('--pacenote-map', (Join-Path $root 'config\pacenote-map.toml'))
-        if ($Version -in 'v1.4', 'v1.5', 'v1.6', 'v1.7') { $sbArgs += @('--pacenote-report', (Join-Path $work "pacenotes-$Short-$Version.md")) }
+        if ($Version -in 'v1.4', 'v1.5', 'v1.6', 'v1.7', 'v1.8') { $sbArgs += @('--pacenote-report', (Join-Path $work "pacenotes-$Short-$Version.md")) }
         if ($Version -in 'v1.3', 'v1.4') { $sbArgs += @('--pacenote-assignment', 'greedy') }
     }
     if (-not $Respawn) { $Respawn = 'relay' }
 }
 if ($Version -in 'v1.3', 'v1.4' -and -not $NoVisuals) { $sbArgs += @('--visuals-canopies', 'full') }
-if ($Version -in 'v1.6', 'v1.7') {
+if ($Version -in 'v1.6', 'v1.7', 'v1.8') {
     $sbArgs += @('--scenery', (Join-Path $root 'config\scenery.toml'), '--names', (Join-Path $root 'config\track-names.toml'))
 }
-if ($Version -eq 'v1.7' -and $Sky -eq 'nz') { $sbArgs += @('--sky', (Join-Path $root 'config\sky.toml')) }
-if ($Version -in 'v1.1', 'v1.2', 'v1.3', 'v1.4', 'v1.5', 'v1.6', 'v1.7' -and -not $NoVisuals) {
+if ($Version -in 'v1.7', 'v1.8' -and $Sky -eq 'nz') { $sbArgs += @('--sky', (Join-Path $root 'config\sky.toml')) }
+if ($Version -in 'v1.1', 'v1.2', 'v1.3', 'v1.4', 'v1.5', 'v1.6', 'v1.7', 'v1.8' -and -not $NoVisuals) {
     $sbArgs += @('--visuals', $(if ($VisualsConfig) { (Resolve-Path $VisualsConfig).Path } else { Join-Path $root 'config\visuals.toml' }), '--visuals-host', $VisualsHost,
                  '--visuals-retarget', $(if ($Version -eq 'v1.1' -or $NoRetarget) { '0' } else { '1' }))
     if ($VisualsOwner) { $sbArgs += @('--visuals-owner', $VisualsOwner) }
     $sbArgs += @('--visuals-vegetation', $Vegetation)
-    if ($Version -in 'v1.6', 'v1.7') { $sbArgs += @('--visuals-vista', '1') }
-    if ($Version -eq 'v1.7') { $sbArgs += @('--visuals-textured', '1') }
+    if ($Version -in 'v1.6', 'v1.7', 'v1.8') { $sbArgs += @('--visuals-vista', '1') }
+    if ($Version -in 'v1.7', 'v1.8') { $sbArgs += @('--visuals-textured', '1') }
+    if ($Version -eq 'v1.8') { $sbArgs += @('--visuals-dr2', '1'); if ($Dr2Revert) { $sbArgs += @('--visuals-dr2-revert', ($Dr2Revert -join ',')) } }
 }
-if ([double]::IsNaN($GroundOffset)) { $GroundOffset = if ($Version -in 'v1.1', 'v1.2', 'v1.3', 'v1.4', 'v1.5', 'v1.6', 'v1.7') { -47 } else { 0 } }
+if ([double]::IsNaN($GroundOffset)) { $GroundOffset = if ($Version -in 'v1.1', 'v1.2', 'v1.3', 'v1.4', 'v1.5', 'v1.6', 'v1.7', 'v1.8') { -47 } else { 0 } }
 if ($GroundOffset -ne 0) { $sbArgs += @('--ground-offset', $GroundOffset.ToString([Globalization.CultureInfo]::InvariantCulture)) }
 if ($Respawn) { $sbArgs += @('--respawn', $Respawn) }
 Run $acrRef @sbArgs
@@ -182,7 +191,8 @@ if ($Verify) {
     }
     Copy-Item (Join-Path $dist "zz_acrdirt_$($Short)_P.*") $full
     $svArgs = @('stage-verify', '--game', (Join-Path $check 'full'), '--ir', $ir, '--out', (Join-Path $check 'verify-cue4parse.txt'))
-    if ($Version -eq 'v1.7' -and $Sky -eq 'nz') { $svArgs += @('--sky', (Join-Path $root 'config\sky.toml')) }
+    if ($Version -eq 'v1.8') { $svArgs += @('--dr2-root', '/Game/AcrDirt/Dr2Tex', '--previews', (Join-Path $work "v1.8-previews\$tag")) }
+    if ($Version -in 'v1.7', 'v1.8' -and $Sky -eq 'nz') { $svArgs += @('--sky', (Join-Path $root 'config\sky.toml')) }
     Run $acrRef @svArgs
     Get-Content (Join-Path $check 'verify-cue4parse.txt')
     # 2) byte-level: convert the shipped container back to legacy and re-run the offline checks (collision, raycast, splines)

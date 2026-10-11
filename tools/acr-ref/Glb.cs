@@ -11,7 +11,13 @@ internal sealed class Glb
     public JsonNode Json { get; }
     readonly byte[] _bin;
 
-    public sealed record Primitive(string Mesh, string Material, float[] Positions, uint[] Indices);
+    public sealed record Primitive(string Mesh, string Material, float[] Positions, uint[] Indices)
+    {
+        /// TEXCOORD_n (2 floats per vertex), null if absent; filled by Primitives(withUv: true).
+        public float[]?[] Uv { get; init; } = [];
+        /// COLOR_0 (4 floats per vertex, 0..1), null if absent; filled by Primitives(withUv: true).
+        public float[]? Color { get; init; }
+    }
 
     public Glb(string path)
     {
@@ -32,7 +38,7 @@ internal sealed class Glb
         _bin = bin ?? [];
     }
 
-    public IEnumerable<Primitive> Primitives()
+    public IEnumerable<Primitive> Primitives(bool withUv = false)
     {
         var materials = Json["materials"]?.AsArray();
         foreach (var mesh in Json["meshes"]!.AsArray())
@@ -44,7 +50,12 @@ internal sealed class Glb
                 var pos = ReadFloats(prim["attributes"]!["POSITION"]!.GetValue<int>(), 3);
                 uint[] idx = prim["indices"] is { } ia ? ReadIndices(ia.GetValue<int>())
                                                        : Enumerable.Range(0, pos.Length / 3).Select(i => (uint)i).ToArray();
-                yield return new Primitive(mesh["name"]?.GetValue<string>() ?? "", mat, pos, idx);
+                var uv = new float[]?[withUv ? 2 : 0];
+                for (int k = 0; k < uv.Length; k++)
+                    if (prim["attributes"]![$"TEXCOORD_{k}"] is { } ta) uv[k] = ReadFloats(ta.GetValue<int>(), 2);
+                float[]? col = withUv && prim["attributes"]!["COLOR_0"] is { } ca && Json["accessors"]![ca.GetValue<int>()]!["type"]!.GetValue<string>() == "VEC4"
+                    ? ReadFloats(ca.GetValue<int>(), 4) : null;
+                yield return new Primitive(mesh["name"]?.GetValue<string>() ?? "", mat, pos, idx) { Uv = uv, Color = col };
             }
     }
 
@@ -59,12 +70,26 @@ internal sealed class Glb
 
     float[] ReadFloats(int accessor, int comps)
     {
-        if (Json["accessors"]![accessor]!["componentType"]!.GetValue<int>() != 5126) throw new NotSupportedException("non-float positions");
-        var (off, stride, count) = View(accessor, comps * 4);
+        var a = Json["accessors"]![accessor]!;
+        int type = a["componentType"]!.GetValue<int>();
+        bool norm = a["normalized"]?.GetValue<bool>() ?? false;
+        int size = type switch { 5126 => 4, 5123 or 5122 => 2, 5121 or 5120 => 1, _ => throw new NotSupportedException($"component type {type}") };
+        if (type != 5126 && !norm) throw new NotSupportedException($"non-normalized integer attribute (type {type})");
+        var (off, stride, count) = View(accessor, comps * size);
         var r = new float[count * comps];
         for (int i = 0; i < count; i++)
             for (int c = 0; c < comps; c++)
-                r[i * comps + c] = BinaryPrimitives.ReadSingleLittleEndian(_bin.AsSpan(off + i * stride + c * 4));
+            {
+                var s = _bin.AsSpan(off + i * stride + c * size);
+                r[i * comps + c] = type switch
+                {
+                    5126 => BinaryPrimitives.ReadSingleLittleEndian(s),
+                    5123 => BinaryPrimitives.ReadUInt16LittleEndian(s) / 65535f,
+                    5122 => Math.Max(BinaryPrimitives.ReadInt16LittleEndian(s) / 32767f, -1),
+                    5121 => s[0] / 255f,
+                    _ => Math.Max((sbyte)s[0] / 127f, -1),
+                };
+            }
         return r;
     }
 

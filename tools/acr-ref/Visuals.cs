@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Numerics;
 using System.Text.Json.Nodes;
 
@@ -22,8 +23,11 @@ internal static class Visuals
     ///   canopies: overrides [objects] canopies (clip | full | none)
     ///   vista: adds DR2's distant vista ring (render/vista.glb, see [vista]) as a last section
     ///   textured: terrain, road and vista get the [textured] materials; the road gets road-following UVs (RoadUv)
+    ///   dr2: (v1.8, on top of textured) terrain, road, vista and the render-mesh objects get DR2's own textures
+    ///        ([dr2_textures], Dr2Materials); dr2Revert: comma-separated sections (terrain, road, vista, objects) that
+    ///        keep their textured (v1.7) material and UVs instead
     internal sealed record Options(string Host, bool Retarget, string? Owner, string Vegetation = "none", string? Canopies = null,
-                                   bool Vista = false, bool Textured = false)
+                                   bool Vista = false, bool Textured = false, bool Dr2 = false, string Dr2Revert = "")
     {
         public static Options From(IReadOnlyDictionary<string, string> named) => new(
             named.GetValueOrDefault("visuals-host", "start"),
@@ -32,7 +36,20 @@ internal static class Visuals
             named.GetValueOrDefault("visuals-vegetation", "none"),
             named.GetValueOrDefault("visuals-canopies") is { Length: > 0 } cn ? cn : null,
             named.GetValueOrDefault("visuals-vista", "0") != "0",
-            named.GetValueOrDefault("visuals-textured", "0") != "0");
+            named.GetValueOrDefault("visuals-textured", "0") != "0",
+            named.GetValueOrDefault("visuals-dr2", "0") != "0",
+            named.GetValueOrDefault("visuals-dr2-revert", ""));
+
+        public static readonly string[] Dr2Sections = ["terrain", "road", "vista", "objects"];
+
+        /// Whether a section gets DR2 textures (dr2 on and the section not reverted).
+        public bool Dr2On(string section)
+        {
+            var revert = Dr2Revert.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (revert.FirstOrDefault(r => !Dr2Sections.Contains(r)) is { } bad)
+                throw new ArgumentException($"--visuals-dr2-revert: unknown section {bad} (use {string.Join(", ", Dr2Sections)})");
+            return Dr2 && !revert.Contains(section);
+        }
     }
 
     // by name: a round trip without the Blueprint containers cannot resolve the class imports
@@ -54,9 +71,10 @@ internal static class Visuals
     }
 
     public static JsonObject Build(LegacyPackage cell, StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, Options opt,
-                                   ObjectColliders.Result? objects, Func<Splines.V3, bool> inPhysicsBounds)
+                                   ObjectColliders.Result? objects, Func<Splines.V3, bool> inPhysicsBounds, Dr2Materials? dr2 = null)
     {
         var r = new JsonObject();
+        if (opt.Dr2 && (dr2 is null || !opt.Textured)) throw new ArgumentException("--visuals-dr2 needs --visuals-textured and the DR2 material writer");
         int hostActor = TriggerActor(cell, opt.Host), otherActor = TriggerActor(cell, opt.Host == "end" ? "start" : "end");
         int e = TriggerMesh(cell, hostActor), other = TriggerMesh(cell, otherActor);
         var comp = ProcMesh.Parse(cell.GetExportData(e), e);
@@ -133,16 +151,17 @@ internal static class Visuals
         dummy.Idx.AddRange([0u, 2u, 1u]);
 
         var imported = new Dictionary<string, int>();
-        int Mat(string section, string key)
+        int MatPath(string path)
         {
-            var path = cfg.Str(section, key);
             if (path.Length == 0) return 0;
             if (imported.TryGetValue(path, out var known)) return known;
             var name = path[(path.LastIndexOf('/') + 1)..];
             int pkgImp = cell.AddImport("/Script/CoreUObject", "Package", 0, path);
             return imported[path] = cell.AddImport("/Script/Engine", "MaterialInstanceConstant", pkgImp, name);
         }
+        int Mat(string section, string key) => MatPath(cfg.Str(section, key));
         string ground = "materials";
+        var dr2Rep = new JsonObject();
         if (opt.Textured)
         {
             ground = "textured";
@@ -150,28 +169,94 @@ internal static class Visuals
             float k = (float)(4 / cfg.Num("textured", "terrain_uv_m"));
             for (int i = 0; i < terrain.Uv.Count; i++) terrain.Uv[i] *= k;
         }
-        var mats = new List<int> { 0, Mat(ground, "terrain"), Mat(ground, "road"), Mat("materials", "posts"), Mat("materials", "gates") };
+        int terrainMat = Mat(ground, "terrain"), roadMat = Mat(ground, "road");
+        if (opt.Dr2On("terrain"))
+        {
+            // DR2 detail slice tiled every terrain_tile_m (the v1.7 UVs tile every terrain_uv_m)
+            float k = (float)(cfg.Num("textured", "terrain_uv_m") / cfg.Num("dr2_textures", "terrain_tile_m"));
+            for (int i = 0; i < terrain.Uv.Count; i++) terrain.Uv[i] *= k;
+            terrainMat = MatPath(dr2!.Mic("terrain", dr2.Texture(cfg.Str("dr2_textures", "terrain"))));
+            dr2Rep["terrain"] = $"{cfg.Str("dr2_textures", "terrain")}, tiled every {cfg.Num("dr2_textures", "terrain_tile_m")} m";
+        }
+        if (opt.Dr2On("road"))
+        {
+            // DR2's road strip runs edge to edge across U: RoadUv's UV1 layout (0..1 across, road_uv1_along_m along)
+            road.Uv = road.Uv1.ToList();
+            road.Color = 0xFFFFFFFF;
+            roadMat = MatPath(dr2!.Mic("road", dr2.Texture(cfg.Str("dr2_textures", "road"))));
+            dr2Rep["road"] = $"{cfg.Str("dr2_textures", "road")} on UV0 = UV1 (0..1 edge to edge, {cfg.Num("textured", "road_uv1_along_m")} m along)";
+        }
+        var mats = new List<int> { 0, terrainMat, roadMat, Mat("materials", "posts"), Mat("materials", "gates") };
         var sections = new List<ProcMesh.Section> { dummy, terrain, road, posts, gates };
         var sectionNames = new JsonArray("dummy", "terrain", "road", "posts", "gates");
         if (objects is not null && cfg.Num("objects", "enabled") != 0)
         {
-            var (objSecs, objRep) = VisualObjects.Build(ir, pl, cfg, objects, inPhysicsBounds, opt.Vegetation, opt.Canopies);
+            var objJson = opt.Dr2On("objects")
+                ? JsonNode.Parse(File.ReadAllText(Path.Combine(ir.Dir, "render", "objects.materials.json")))!.AsArray()
+                    .GroupBy(m => m!["name"]!.GetValue<string>()).ToDictionary(g => g.Key, g => g.First()!)
+                : null;
+            var objDiffuse = new Dictionary<string, string?>();
+            var noTex = new Dictionary<string, string>();
+            string? Diffuse(string mat)
+            {
+                if (objDiffuse.TryGetValue(mat, out var known)) return known;
+                string? w = "not in objects.materials.json";
+                var d = objJson!.TryGetValue(mat, out var j) ? dr2!.ObjectDiffuse(j, out w) : null;
+                if (d is null) noTex[mat] = w!;
+                return objDiffuse[mat] = d;
+            }
+            var (objSecs, objRep) = VisualObjects.Build(ir, pl, cfg, objects, inPhysicsBounds, opt.Vegetation, opt.Canopies,
+                                                        objJson is null ? null : m => Diffuse(m) is not null);
             foreach (var cls in VisualObjects.Classes.Where(c => objSecs[c].Idx.Count > 0))
             {
                 sections.Add(objSecs[cls]); mats.Add(Mat("object_materials", cls)); sectionNames.Add($"objects:{cls}");
             }
+            var drawn = new HashSet<string>();
+            foreach (var (key, s) in objSecs.Where(kv => kv.Key.StartsWith(VisualObjects.Dr2Prefix) && kv.Value.Idx.Count > 0).OrderBy(kv => kv.Key))
+            {
+                var mat = key[VisualObjects.Dr2Prefix.Length..];
+                drawn.Add(mat);
+                sections.Add(s); mats.Add(MatPath(dr2!.ObjectMic(Diffuse(mat)!))); sectionNames.Add($"objects:{key}");
+            }
+            if (objJson is not null)
+                dr2Rep["objects"] = new JsonObject
+                {
+                    ["dr2_material_sections"] = drawn.Count,
+                    ["drawn"] = objRep["dr2_material_sections"]?.DeepClone(),
+                    ["materials_without_dr2_texture"] = new JsonObject(noTex.GroupBy(kv => kv.Value).OrderBy(g => g.Key)
+                        .Select(g => KeyValuePair.Create(g.Key, (JsonNode?)$"{g.Count()} ({string.Join(", ", g.Select(kv => kv.Key).Take(6))}{(g.Count() > 6 ? ", ..." : "")})"))),
+                    ["note"] = "materials without a DR2 texture keep their class colour (as do trunks and collider-shape proxies)",
+                };
             r["objects"] = objRep;
         }
         if (opt.Vista)
         {
-            var (vista, vr) = BuildVista(ir, pl, cfg, terrain, road);
-            if (opt.Textured)
+            var (vista, vr) = BuildVista(ir, pl, cfg, terrain, road, colourMapUv: opt.Dr2On("vista"));
+            int vistaMat;
+            if (opt.Dr2On("vista"))
             {
-                float k = (float)(4 / cfg.Num("textured", "vista_uv_m"));
-                for (int i = 0; i < vista.Uv.Count; i++) vista.Uv[i] *= k;
+                vista.Uv = vista.Uv1; vista.Uv1 = new();
+                vistaMat = MatPath(dr2!.VistaMic());
+                dr2Rep["vista"] = $"baked {cfg.Str("dr2_textures", "vista_colour_map")} x layers, plan-projected over the vista bounds";
             }
-            sections.Add(vista); mats.Add(opt.Textured ? Mat("textured", "vista") : Mat("vista", "material")); sectionNames.Add("vista");
+            else
+            {
+                if (opt.Textured)
+                {
+                    float k = (float)(4 / cfg.Num("textured", "vista_uv_m"));
+                    for (int i = 0; i < vista.Uv.Count; i++) vista.Uv[i] *= k;
+                }
+                vistaMat = opt.Textured ? Mat("textured", "vista") : Mat("vista", "material");
+            }
+            sections.Add(vista); mats.Add(vistaMat); sectionNames.Add("vista");
             r["vista"] = vr;
+        }
+        if (opt.Dr2)
+        {
+            dr2Rep["reverted_to_v1_7"] = opt.Dr2Revert;
+            dr2Rep["textures"] = dr2!.TextureCount; dr2Rep["mics"] = dr2.MicCount; dr2Rep["texture_bytes"] = dr2.TextureBytes;
+            dr2Rep["packages"] = dr2.Log.DeepClone();
+            r["dr2"] = dr2Rep;
         }
         r["sections"] = sectionNames;
         r["triangles_total"] = sections.Sum(s => s.Idx.Count / 3);
@@ -224,7 +309,91 @@ internal static class Visuals
 
     /// Offline check of the rebuilt component in a built (or round-tripped) cell.
     public static int Check(LegacyPackage cell, StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, Options opt, TextWriter w,
-                            JsonNode? visualsReport = null, RoadProbe? probe = null)
+                            JsonNode? visualsReport = null, RoadProbe? probe = null, string? legacyRoot = null)
+    {
+        int f0 = CheckBody(cell, ir, pl, cfg, opt, w, visualsReport, probe);
+        if (opt.Dr2 && legacyRoot is not null) f0 += CheckDr2(cell, cfg, opt, w, legacyRoot, visualsReport);
+        return f0;
+    }
+
+    /// v1.8: every section's DR2 MaterialInstanceConstant and its textures are in the package root (built container,
+    /// round-tripped), parse, and are what the sections expect; reverted sections use their v1.7 material.
+    static int CheckDr2(LegacyPackage cell, Toml cfg, Options opt, TextWriter w, string legacyRoot, JsonNode? visualsReport)
+    {
+        int failures = 0;
+        void C(bool ok, string what) { w.WriteLine($"{(ok ? "PASS" : "FAIL")} {what}"); if (!ok) failures++; }
+        var pmcs = Enumerable.Range(0, cell.ExportCount).Where(i => cell.ExportClass(i) == "ProceduralMeshComponent").ToList();
+        int e = pmcs.MaxBy(i => cell.GetExportData(i).Length);
+        var c = ProcMesh.Parse(cell.GetExportData(e), e);
+        int at = c.Slots[7].at, n = BitConverter.ToInt32(c.Data, at);
+        var names = (visualsReport?["sections"] as JsonArray)?.Select(x => x!.GetValue<string>()).ToList() ?? [];
+        string root = cfg.Str("dr2_textures", "package_root").TrimEnd('/');
+        string File(string pkg) => Path.Combine(legacyRoot, "acr", "Content", pkg["/Game/".Length..].Replace('/', Path.DirectorySeparatorChar) + ".uasset");
+        var micPaths = new List<(string section, string path)>();
+        for (int i = 0; i < n; i++)
+        {
+            int m = BitConverter.ToInt32(c.Data, at + 4 + 4 * i);
+            string path = m < 0 ? cell.ImportName(-cell.ImportOuter(-m - 1) - 1) : "";
+            micPaths.Add((i < names.Count ? names[i] : $"#{i}", path));
+        }
+        var expectDr2 = new Dictionary<string, bool>
+        {
+            ["terrain"] = opt.Dr2On("terrain"), ["road"] = opt.Dr2On("road"), ["vista"] = opt.Dr2On("vista"),
+        };
+        foreach (var (sec, want) in expectDr2)
+        {
+            var hit = micPaths.FirstOrDefault(x => x.section == sec);
+            if (hit.section is null) continue;
+            bool isDr2 = hit.path.StartsWith(root + "/");
+            // reverted: the v1.7 material lives in another container, so a round trip of ours alone cannot name it
+            C(isDr2 == want, $"dr2: section {sec} uses {(isDr2 ? $"its DR2 material {hit.path}" : "a material outside the DR2 package root (reverted to v1.7)")}");
+        }
+        var objDr2 = micPaths.Where(x => x.section.StartsWith("objects:" + VisualObjects.Dr2Prefix)).ToList();
+        C(opt.Dr2On("objects") ? objDr2.Count > 0 && objDr2.All(x => x.path.StartsWith(root + "/")) : objDr2.Count == 0,
+          $"dr2: {objDr2.Count} object sections with DR2 materials{(opt.Dr2On("objects") ? "" : " (objects reverted)")}");
+
+        var mics = micPaths.Select(x => x.path).Where(p => p.StartsWith(root + "/")).Distinct().ToList();
+        int texOk = 0, micOk = 0; var problems = new List<string>(); var textures = new HashSet<string>();
+        foreach (var mic in mics)
+        {
+            if (!System.IO.File.Exists(File(mic))) { problems.Add($"{mic}: not in the container"); continue; }
+            var mp = new LegacyPackage(File(mic));
+            var texImports = Enumerable.Range(0, mp.ImportCount).Where(i => mp.ImportClassName(i) == "Texture2D").ToList();
+            // a round trip of our container alone cannot name the parent (another container): retoc writes it as
+            // /Engine/UnknownPackage.UnknownExport; stage-verify resolves it to M_Simple through the game's containers
+            var parent = Enumerable.Range(0, mp.ImportCount).FirstOrDefault(i => mp.ImportClassName(i) == "Material" && mp.ImportName(i) == "M_Simple"
+                                                                                 || mp.ImportName(i) == "UnknownExport", -1);
+            bool ok = mp.ExportCount == 1 && mp.ExportClass(0) == "MaterialInstanceConstant" && mp.PackageName == mic && mp.ExportName(0) == mic[(mic.LastIndexOf('/') + 1)..]
+                      && texImports.Count == 3 && parent >= 0;
+            foreach (var t in texImports)
+            {
+                string tp = mp.ImportName(-mp.ImportOuter(t) - 1);
+                if (!tp.StartsWith(root + "/") || !System.IO.File.Exists(File(tp))) { ok = false; problems.Add($"{mic}: texture {tp} missing"); continue; }
+                if (!textures.Add(tp)) continue;
+                var tpkg = new LegacyPackage(File(tp));
+                var dr = tpkg.DataResources();
+                int count = BinaryPrimitives.ReadInt32LittleEndian(dr.AsSpan(4));
+                var data = tpkg.GetExportData(0);
+                bool inline = Enumerable.Range(0, count).All(k =>
+                {
+                    var en = dr.AsSpan(8 + k * LegacyPackage.DataResourceSize);
+                    long off = BinaryPrimitives.ReadInt64LittleEndian(en[4..]), size = BinaryPrimitives.ReadInt64LittleEndian(en[20..]);
+                    return BinaryPrimitives.ReadUInt32LittleEndian(en[40..]) == 0x48 && off > 0 && off + size <= data.Length
+                           && BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan((int)off - 4)) == k;
+                });
+                if (tpkg.ExportClass(0) == "Texture2D" && tpkg.PackageName == tp && tpkg.Names[1].StartsWith("PF_") && count > 0 && inline) texOk++;
+                else problems.Add($"{tp}: texture package does not parse as expected");
+            }
+            if (ok) micOk++; else problems.Add($"{mic}: MIC layout");
+        }
+        C(problems.Count == 0 && micOk == mics.Count && texOk == textures.Count && (mics.Count > 0) == Options.Dr2Sections.Any(opt.Dr2On),
+          $"dr2: {mics.Count} MICs (parent M_Simple, 3 texture imports each) and {textures.Count} textures resolve in the container; every mip inline at its data resource" +
+          (problems.Count > 0 ? $"; {string.Join("; ", problems.Take(5))}" : ""));
+        return failures;
+    }
+
+    static int CheckBody(LegacyPackage cell, StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, Options opt, TextWriter w,
+                         JsonNode? visualsReport, RoadProbe? probe)
     {
         int failures = 0;
         void C(bool ok, string what) { w.WriteLine($"{(ok ? "PASS" : "FAIL")} {what}"); if (!ok) failures++; }
@@ -334,7 +503,14 @@ internal static class Visuals
             }
         }
         else if (probe is not null) C(false, "visuals road corridor: section names missing from the report");
-        if (opt.Textured)
+        if (opt.Dr2On("road"))
+        {
+            var road = secs[2];
+            bool same = road.Uv1.Count == road.Pos.Count && road.Uv.Count == road.Pos.Count && road.Uv.Zip(road.Uv1).All(x => x.First == x.Second);
+            C(same && road.Uv.All(u => u.X >= 0 && u.X <= 1) && road.Color == 0xFFFFFFFF,
+              $"visuals: DR2 road strip on UV0 = UV1 (0..1 edge to edge) on all {road.Pos.Count} road vertices, colour white");
+        }
+        else if (opt.Textured)
         {
             var road = secs[2];
             double nomU = cfg.Num("textured", "road_uv0_across_m"), nomV = cfg.Num("textured", "road_uv0_along_m");
@@ -387,7 +563,10 @@ internal static class Visuals
 
     /// DR2's distant vista ring in world space. Triangles over a [vista] exclude_cell_m grid cell that the drawn ground
     /// touches are dropped: the ring also runs under the playable area, where it would show through the ground.
-    static (ProcMesh.Section, JsonObject) BuildVista(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ProcMesh.Section terrain, ProcMesh.Section road)
+    /// colourMapUv: UV1 = the DR2 glb plan position over the vista's plan bounds (0..1; how DR2's large vista colour map
+    /// lies, see acr-ref vista-map).
+    static (ProcMesh.Section, JsonObject) BuildVista(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ProcMesh.Section terrain, ProcMesh.Section road,
+                                                     bool colourMapUv = false)
     {
         double cellSize = cfg.Num("vista", "exclude_cell_m") * 100;
         (long, long) Key(float x, float y) => ((long)Math.Floor(x / cellSize), (long)Math.Floor(y / cellSize));
@@ -398,7 +577,15 @@ internal static class Visuals
 
         var vista = new ProcMesh.Section();
         int dropped = 0, source = 0;
-        foreach (var prim in new Glb(Path.Combine(ir.Dir, "render", "vista.glb")).Primitives())
+        var prims = new Glb(Path.Combine(ir.Dir, "render", "vista.glb")).Primitives().ToList();
+        float x0 = float.MaxValue, x1 = float.MinValue, z0 = float.MaxValue, z1 = float.MinValue;
+        foreach (var prim in prims)
+            for (int v = 0; v < prim.Positions.Length / 3; v++)
+            {
+                x0 = Math.Min(x0, prim.Positions[v * 3]); x1 = Math.Max(x1, prim.Positions[v * 3]);
+                z0 = Math.Min(z0, prim.Positions[v * 3 + 2]); z1 = Math.Max(z1, prim.Positions[v * 3 + 2]);
+            }
+        foreach (var prim in prims)
         {
             int nv = prim.Positions.Length / 3;
             var ue = new Vector3[nv];
@@ -413,6 +600,7 @@ internal static class Visuals
                 if (map[v] >= 0) return map[v];
                 map[v] = vista.Pos.Count;
                 vista.Pos.Add(ue[v]); vista.Nrm.Add(Vector3.Zero); vista.Uv.Add(new Vector2(ue[v].X / 400, ue[v].Y / 400));
+                if (colourMapUv) vista.Uv1.Add(new Vector2((prim.Positions[v * 3] - x0) / (x1 - x0), (prim.Positions[v * 3 + 2] - z0) / (z1 - z0)));
                 return map[v];
             }
             for (int t = 0; t + 2 < prim.Indices.Length; t += 3)

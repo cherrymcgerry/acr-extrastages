@@ -47,6 +47,13 @@ internal static class Program
                 "scenery-survey" => Scenery.Survey(opts),
                 "mesh-uv" => MeshUv.Run(opts),
                 "sky-slots" => Sky.Probe(opts),
+                "tex-scan" => TexScan.Textures(opts),
+                "mic-scan" => TexScan.Materials(opts),
+                "legacy-dump" => TexScan.Dump(opts),
+                "uv-fit" => UvFit.Run(opts),
+                "dds-preview" => DropIn.Preview(opts),
+                "vista-map" => DropIn.VistaMap(opts),
+                "tex-mean" => TexScan.Means(opts),
                 _ => Fail($"unknown command '{args[0]}'"),
             };
         }

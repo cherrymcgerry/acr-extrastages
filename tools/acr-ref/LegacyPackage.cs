@@ -55,7 +55,9 @@ internal sealed class LegacyPackage
         p += 20;                                      // saved hash
         Field("TotalHeaderSize");
         int customVersions = I32(); p += customVersions * 20;
+        _packageNamePos = p;
         PackageName = FStr();
+        _packageNameEnd = p;
         uint flags = BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(p)); p += 4;
         if ((flags & 0x80000000) == 0) throw new NotSupportedException("package is not FilterEditorOnly");
         Field("NameCount"); Field("NameOffset");
@@ -79,7 +81,7 @@ internal sealed class LegacyPackage
         int chunkIds = I32(); p += chunkIds * 4;
         Field("PreloadDependencyCount"); Field("PreloadDependencyOffset");
         Field("NamesReferencedFromExportDataCount");
-        p += 8;                                       // payload TOC offset
+        _fieldPos["PayloadTocOffset"] = p; p += 8;
         Field("DataResourceOffset");
 
         int Get(string f) => BinaryPrimitives.ReadInt32LittleEndian(d.AsSpan(_fieldPos[f]));
@@ -172,6 +174,11 @@ internal sealed class LegacyPackage
         if (hits.Count != 1) throw new InvalidOperationException($"export {name} ({cls}) matched {hits.Count} times");
         return hits[0];
     }
+
+    /// Offset of the header region after the export map (cell maps, depends, preload dependencies, data resources).
+    public int HeaderTailStart => _exportsEnd;
+    public int HeaderField(string name) => BinaryPrimitives.ReadInt32LittleEndian(_header.AsSpan(_fieldPos[name]));
+    public IEnumerable<string> HeaderFieldNames => _fieldPos.Keys;
 
     public byte[] GetExportData(int e) => _exportData[e];
     public void SetExportData(int e, byte[] data) => _exportData[e] = data;
@@ -275,11 +282,86 @@ internal sealed class LegacyPackage
         }
         foreach (var g in _generationsPos) BinaryPrimitives.WriteInt32LittleEndian(h.AsSpan(g + 4), _names.Count);
         BinaryPrimitives.WriteInt64LittleEndian(h.AsSpan(_fieldPos["BulkDataStartOffset"]), end);
+        if (_dataResources is not null) h = SpliceDataResources(h);
+        if (_newPackageName is not null) h = SplicePackageName(h);
 
         using var u = new MemoryStream();
         foreach (var data in _exportData) u.Write(data);
         u.Write(_uexpTag);
         return (h, u.ToArray());
+    }
+
+    string? _newPackageName;
+    byte[]? _dataResources;
+    int _packageNamePos, _packageNameEnd;
+
+    /// Renames a name-map entry in place (all references keep their index).
+    public void RenameName(int index, string s) { _names[index] = s; _nameHashes[index] = 0; }
+
+    /// Changes the package name in the summary (the name-map entry is renamed separately with RenameName).
+    public void SetPackageName(string name) => _newPackageName = name;
+
+    /// The data resource table (bulk data metadata, UE 5.2+): int32 version, int32 count, 44-byte entries
+    /// (flags u32, serial offset i64, duplicate serial offset i64, serial size i64, raw size i64, outer index i32,
+    /// legacy bulk data flags u32). Inline payloads have serial offsets relative to the export data.
+    public const int DataResourceSize = 44;
+    public byte[] DataResources()
+    {
+        int at = HeaderField("DataResourceOffset");
+        if (at <= 0) return [];
+        int n = BinaryPrimitives.ReadInt32LittleEndian(_header.AsSpan(at + 4));
+        return _header.AsSpan(at, 8 + n * DataResourceSize).ToArray();
+    }
+    public void SetDataResources(byte[] table) => _dataResources = table;
+
+    byte[] SpliceDataResources(byte[] h)
+    {
+        int oldAt = HeaderField("DataResourceOffset");
+        if (oldAt <= 0) throw new NotSupportedException("package has no data resource table");
+        if (BinaryPrimitives.ReadInt64LittleEndian(_header.AsSpan(_fieldPos["PayloadTocOffset"])) > 0)
+            throw new NotSupportedException("package has a payload TOC; resizing the data resources is not supported");
+        foreach (var pos in _shiftablePos)
+            if (BinaryPrimitives.ReadInt32LittleEndian(_header.AsSpan(pos)) > oldAt)
+                throw new NotSupportedException("a header table follows the data resources; resizing them is not supported");
+        int at = BinaryPrimitives.ReadInt32LittleEndian(h.AsSpan(_fieldPos["DataResourceOffset"]));
+        int oldLen = DataResources().Length;
+        var r = h.AsSpan(0, at).ToArray().Concat(_dataResources!).Concat(h.AsSpan(at + oldLen).ToArray()).ToArray();
+        int d = r.Length - h.Length;
+        BinaryPrimitives.WriteInt32LittleEndian(r.AsSpan(_fieldPos["TotalHeaderSize"]), BinaryPrimitives.ReadInt32LittleEndian(r.AsSpan(_fieldPos["TotalHeaderSize"])) + d);
+        ShiftExportData(r, d, BinaryPrimitives.ReadInt32LittleEndian(r.AsSpan(_fieldPos["ExportOffset"])), 0);
+        return r;
+    }
+
+    byte[] SplicePackageName(byte[] h)
+    {
+        var s = _newPackageName!;
+        var fstr = new byte[4 + s.Length + 1];
+        BinaryPrimitives.WriteInt32LittleEndian(fstr, s.Length + 1);
+        Encoding.ASCII.GetBytes(s).CopyTo(fstr, 4);
+        var r = h.AsSpan(0, _packageNamePos).ToArray().Concat(fstr).Concat(h.AsSpan(_packageNameEnd).ToArray()).ToArray();
+        int d = fstr.Length - (_packageNameEnd - _packageNamePos);
+        int P(string f) => _fieldPos[f] >= _packageNameEnd ? _fieldPos[f] + d : _fieldPos[f];
+        void Add(string f) { int v = BinaryPrimitives.ReadInt32LittleEndian(r.AsSpan(P(f))); if (v > 0) BinaryPrimitives.WriteInt32LittleEndian(r.AsSpan(P(f)), v + d); }
+        Add("TotalHeaderSize");
+        foreach (var f in new[] { "NameOffset", "SoftObjectPathsOffset", "ExportOffset", "ImportOffset" }) Add(f);
+        foreach (var f in _fieldPos.Where(kv => _shiftablePos.Contains(kv.Value)).Select(kv => kv.Key)) Add(f);
+        var toc = r.AsSpan(P("PayloadTocOffset"));
+        if (BinaryPrimitives.ReadInt64LittleEndian(toc) > 0) BinaryPrimitives.WriteInt64LittleEndian(toc, BinaryPrimitives.ReadInt64LittleEndian(toc) + d);
+        ShiftExportData(r, d, BinaryPrimitives.ReadInt32LittleEndian(r.AsSpan(P("ExportOffset"))), d);
+        return r;
+    }
+
+    /// Moves the export data (serial offsets and BulkDataStartOffset) by d bytes; fieldShift: how far the summary
+    /// fields after the package name moved.
+    void ShiftExportData(byte[] r, int d, int exportsAt, int fieldShift)
+    {
+        for (int e = 0; e < _exports.Count; e++)
+        {
+            var s = r.AsSpan(exportsAt + e * ExportSize + 36);
+            BinaryPrimitives.WriteInt64LittleEndian(s, BinaryPrimitives.ReadInt64LittleEndian(s) + d);
+        }
+        var b = r.AsSpan(_fieldPos["BulkDataStartOffset"] + fieldShift);
+        BinaryPrimitives.WriteInt64LittleEndian(b, BinaryPrimitives.ReadInt64LittleEndian(b) + d);
     }
 
     public void SaveTo(string uassetPath)

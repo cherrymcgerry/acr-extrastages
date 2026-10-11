@@ -129,6 +129,7 @@ internal static class StageBuild
             report["options"]!["visuals_canopies"] = vo.Canopies;
             if (vo.Vista) report["options"]!["visuals_vista"] = true;
             if (vo.Textured) report["options"]!["visuals_textured"] = true;
+            if (vo.Dr2) { report["options"]!["visuals_dr2"] = true; report["options"]!["visuals_dr2_revert"] = vo.Dr2Revert; vo.Dr2On("terrain"); }
         }
         var road = Road(ir, pl);
 
@@ -624,7 +625,13 @@ internal static class StageBuild
             r["respawn"] = Respawn.Relay(cell, objs, contour, road, sinkAll: respawnMode == "sink");
             actors.Add($"respawn walls ({respawnMode}): {r["respawn"]!.ToJsonString()}");
         }
-        if (o.Named.GetValueOrDefault("visuals") is { } visualsCfg) r["visuals"] = Visuals.Build(cell, ir, pl, Toml.Load(visualsCfg), Visuals.Options.From(o.Named), objectShapes, InPhysicsBounds);
+        if (o.Named.GetValueOrDefault("visuals") is { } visualsCfg)
+        {
+            var vopt = Visuals.Options.From(o.Named);
+            var vcfg = Toml.Load(visualsCfg);
+            var dr2 = vopt.Dr2 ? new Dr2Materials(vcfg, ir.Dir, legacy, outRoot) : null;
+            r["visuals"] = Visuals.Build(cell, ir, pl, vcfg, vopt, objectShapes, InPhysicsBounds, dr2);
+        }
         r["actors"] = actors;
         r["dr2_centre_length_m"] = newLine.Length / 100;
         foreach (var a in actors) Console.WriteLine($"  {a}");
@@ -789,11 +796,12 @@ internal static class StageBuild
             var opt = new Visuals.Options(vo["visuals_host"]?.GetValue<string>() ?? "start",
                 vo["visuals_retarget"]?.GetValue<bool>() ?? false, vo["visuals_owner"]?.GetValue<string>(),
                 vo["visuals_vegetation"]?.GetValue<string>() ?? "none", vo["visuals_canopies"]?.GetValue<string>(),
-                vo["visuals_vista"]?.GetValue<bool>() ?? false, vo["visuals_textured"]?.GetValue<bool>() ?? false);
+                vo["visuals_vista"]?.GetValue<bool>() ?? false, vo["visuals_textured"]?.GetValue<bool>() ?? false,
+                vo["visuals_dr2"]?.GetValue<bool>() ?? false, vo["visuals_dr2_revert"]?.GetValue<string>() ?? "");
             RoadProbe? probe = vo["objects"]?.GetValue<string>() is { } objCfg
                 ? new RoadProbe(Road(ir, pl), new SurfaceGrid(Path.Combine(ir.Dir, "collision.glb"), pl), Toml.Load(objCfg)) : null;
             failures += Visuals.Check(new LegacyPackage(HostPaths.Resolve(root, HostPaths.Cell)), ir, pl, Toml.Load(visualsCfg), opt, w,
-                                      report["cell"]?["visuals"], probe);
+                                      report["cell"]?["visuals"], probe, root);
         }
 
         if (report["options"]?["scenery"]?.GetValue<string>() is { } sceneryCfg)

@@ -574,3 +574,59 @@ Report:
 - where the sun is, compared with v1.6;
 - the frame rate;
 - anything that broke.
+
+## v1.8 test: DR2's own textures (drop-in)
+
+`work\acr\dist-v1.8\zz_acrdirt_nz01r5_P.*`: v1.7 with one change, the DR2 textures. The container name is the same as
+v1.6 and v1.7, and `dist-v1.6` and `dist-v1.7` are unchanged. Build: `.\mods\acrdirt-stage\build.ps1 -Version v1.8 -Verify`.
+- Offline: 174 PASS / 0 FAIL in the build log. CUE4Parse loads all 20 new materials from the shipped container, with
+  parent `M_Simple` and 22 textures. The textures are not virtual, NeverStream, and every mip's data is present.
+- Previews decoded from the shipped container: `work\acr\v1.8-previews\nz01r5-v1.8`. DR2 sources and the vista
+  overlay: `work\acr\v1.8-previews\dr2`.
+- Sizes: ucas 496,729,189 (78 MB more than v1.7, all texture mips), utoc 96,757, pak 347.
+- Geometry is the same as v1.7: 1,519,474 triangles. The object triangles are split into 33 sections by DR2 material
+  instead of v1.7's 11 sections.
+- **Revert switch:** `-Dr2Revert terrain,road,vista,objects`, or any subset, keeps those sections on their v1.7
+  material. Reverting all four rebuilds v1.7 byte for byte (verified).
+
+What changed from v1.7:
+- **New packages** under `/Game/AcrDirt/Dr2Tex/nz01r5`:
+  - Textures: `Tex/T_*` (clones of plain cooked `Texture2D`s, DR2's BCn mips copied, capped at 2048).
+  - Materials: `Mat/MI_*` (MaterialInstanceConstants of ACR's opaque `M_Simple`, with a flat roughness map and a
+    flat normal map).
+- **Road:** DR2's road strip texture (gravel with grass verges at both edges) mapped edge to edge across the road and
+  repeating every 7.2 m along it.
+- **Terrain:** DR2's grass detail texture, tiled every 8 m.
+  - Inferred: DR2 blends 17 detail layers per vertex and tints them with grey-centred colour maps. `M_Simple` takes one
+    texture, so v1.8 has uniform grass and loses DR2's blend.
+- **Vista:** DR2's large vista colour map, baked with its three layer colours (grass, road, forest) by its blend map
+  and laid flat over the vista in plan.
+  - Inferred: which blend-map channel means which layer.
+- **Objects:** 22 sections (265 instances) with the object's own DR2 diffuse texture and UVs.
+  - Kept the v1.7 class colour: foliage, trunk, blend and glass shaders (`M_Simple` is opaque, so it cannot cut out
+    leaves), materials without a diffuse (`ground_ao`), the sponsor banners (not in the stage files), trunks and the
+    collider-shape proxies.
+
+Check:
+1. **Road:** a straight and a hairpin.
+   - The gravel strip should follow the road, with the grass verges at the edges, not across or diagonal.
+   - Note any visible repeat every 7 m, or stretching in hairpins.
+2. **Ground beside the road:** grass, lit, at a believable scale next to the car (not tiny or blurry).
+3. **Fences, gates, sheds, buildings, signs, rocks:** textured, not mirrored or garbled.
+   - Note anything black, pink/checkerboard (a texture that failed to load), or upside-down (V flipped).
+4. **Vista/horizon:** greens and browns that roughly match the land, no stripes or flicker.
+5. **Shininess:** everything uses one roughness (0.85). Note if anything looks plastic or wet.
+6. **Loading and frame rate** compared with v1.7: about 70 MB of extra textures are loaded up front (no streaming).
+7. As before: start, timer, pacenotes, respawn, trunks, sky, names.
+
+If the stage fails to load or something looks broken, rebuild with `-Dr2Revert objects` (or the section at fault) and
+retry.
+
+Install:
+1. Remove every previous `zz_acrdirt_*` file from `~mods`.
+2. Copy the three files from `work\acr\dist-v1.8` into `~mods`.
+
+Report:
+- screenshots of a straight road, a hairpin, the ground beside the road, a fence or building, and the vista;
+- loading time and frame rate compared with v1.7;
+- anything that broke.

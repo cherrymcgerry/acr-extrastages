@@ -29,10 +29,16 @@ internal static class VisualObjects
         _ => "other",
     };
 
-    sealed record Mesh(Vector3[] Pos, uint[] Idx, Vector3 Min, Vector3 Max);
+    sealed record Mesh(Vector3[] Pos, uint[] Idx, Vector3 Min, Vector3 Max, Vector2[] Uv, string[] TriMaterial);
 
+    /// Prefix of the per-DR2-material sections (dr2Materials): "dr2:" + glb material name.
+    public const string Dr2Prefix = "dr2:";
+
+    /// dr2Materials (v1.8): render-mesh instances put their triangles of the accepted DR2 materials into one section per
+    /// material, with the glb's TEXCOORD_0; everything else stays in the class sections as before.
     public static (Dictionary<string, ProcMesh.Section> sections, JsonObject report) Build(
-        StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ObjectColliders.Result objs, Func<V3, bool> inPhysicsBounds, string vegetation, string? canopies = null)
+        StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ObjectColliders.Result objs, Func<V3, bool> inPhysicsBounds, string vegetation, string? canopies = null,
+        Func<string, bool>? dr2Materials = null)
     {
         int maxMeshTris = (int)cfg.Num("objects", "max_mesh_triangles");
         int sides = (int)cfg.Num("objects", "prism_sides");
@@ -40,19 +46,24 @@ internal static class VisualObjects
         var counts = Classes.ToDictionary(c => c, _ => 0);
 
         var meshes = new Dictionary<string, Mesh>();
-        foreach (var g in new Glb(Path.Combine(ir.Dir, "render", "objects.glb")).Primitives().GroupBy(p => p.Mesh))
+        foreach (var g in new Glb(Path.Combine(ir.Dir, "render", "objects.glb")).Primitives(withUv: dr2Materials is not null).GroupBy(p => p.Mesh))
         {
-            var pos = new List<Vector3>(); var idx = new List<uint>();
+            var pos = new List<Vector3>(); var idx = new List<uint>(); var uv = new List<Vector2>(); var triMat = new List<string>();
             foreach (var p in g)
             {
                 uint b = (uint)pos.Count;
                 for (int i = 0; i < p.Positions.Length; i += 3) pos.Add(new Vector3(p.Positions[i], p.Positions[i + 1], p.Positions[i + 2]));
+                var t0 = p.Uv.Length > 0 ? p.Uv[0] : null;
+                for (int i = 0; i < p.Positions.Length / 3; i++) uv.Add(t0 is null ? Vector2.Zero : new Vector2(t0[i * 2], t0[i * 2 + 1]));
                 idx.AddRange(p.Indices.Select(i => i + b));
+                triMat.AddRange(Enumerable.Repeat(p.Material, p.Indices.Length / 3));
+                if (dr2Materials is not null && dr2Materials(p.Material)) sec.TryAdd(Dr2Prefix + p.Material, new ProcMesh.Section());
             }
             var mn = new Vector3(float.MaxValue); var mx = new Vector3(float.MinValue);
             foreach (var v in pos) { mn = Vector3.Min(mn, v); mx = Vector3.Max(mx, v); }
-            meshes[g.Key] = new Mesh(pos.ToArray(), idx.ToArray(), mn, mx);
+            meshes[g.Key] = new Mesh(pos.ToArray(), idx.ToArray(), mn, mx, uv.ToArray(), triMat.ToArray());
         }
+        int dr2Tris = 0, dr2Instances = 0;
 
         var kept = objs.Kept.GroupBy(s => s.Instance).ToDictionary(g => g.Key, g => g.ToList());
         var stage = JsonNode.Parse(File.ReadAllText(Path.Combine(ir.Dir, "stage.json")))!["objects"]!;
@@ -136,7 +147,12 @@ internal static class VisualObjects
             {
                 meshInstances++;
                 var cls = shapes.GroupBy(s => ClassOf(s.Material)).OrderByDescending(g => g.Count()).First().Key;
-                AddMesh(sec[cls], mesh, m, pl, Ue);
+                if (dr2Materials is null) AddMesh(sec[cls], mesh, m, pl, Ue);
+                else
+                {
+                    int n = AddMeshSplit(t => sec.GetValueOrDefault(Dr2Prefix + mesh.TriMaterial[t]) ?? sec[cls], t => sec.ContainsKey(Dr2Prefix + mesh.TriMaterial[t]), mesh, m, Ue);
+                    dr2Tris += n; if (n > 0) dr2Instances++;
+                }
                 var (bmn, bmx) = WorldBox(mesh.Min, mesh.Max, m, Ue);
                 foreach (var s in shapes)
                 {
@@ -226,6 +242,11 @@ internal static class VisualObjects
             ["sections"] = new JsonObject(Classes.Where(c => sec[c].Idx.Count > 0).Select(c => KeyValuePair.Create(c,
                 (JsonNode?)$"{counts[c]} objects, {sec[c].Pos.Count} vertices, {sec[c].Idx.Count / 3} triangles"))),
             ["triangles"] = sec.Values.Sum(s => s.Idx.Count / 3),
+            ["dr2_material_sections"] = dr2Materials is null ? null : new JsonObject
+            {
+                ["sections"] = sec.Count(kv => kv.Key.StartsWith(Dr2Prefix) && kv.Value.Idx.Count > 0),
+                ["instances"] = dr2Instances, ["triangles"] = dr2Tris,
+            },
             ["templates"] = new JsonObject(perTemplate.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)kv.Value))),
         };
         return (sec, r);
@@ -387,6 +408,40 @@ internal static class VisualObjects
             s.Nrm[a] += outUe; s.Nrm[bb] += outUe; s.Nrm[c] += outUe;
             s.Idx.AddRange([(uint)a, (uint)bb, (uint)c]);
         }
+    }
+
+    /// AddMesh with each triangle routed to target(t); vertices are duplicated per target section and carry the glb UV.
+    /// Returns the number of triangles that went to a section where dr2(t) holds.
+    static int AddMeshSplit(Func<int, ProcMesh.Section> target, Func<int, bool> dr2, Mesh mesh, Matrix4x4 m, Func<Vector3, V3> ue)
+    {
+        var w = new Vector3[mesh.Pos.Length];
+        var u = new Vector3[mesh.Pos.Length];
+        for (int i = 0; i < mesh.Pos.Length; i++) { w[i] = Vector3.Transform(mesh.Pos[i], m); var q = ue(w[i]); u[i] = new((float)q.X, (float)q.Y, (float)q.Z); }
+        var maps = new Dictionary<ProcMesh.Section, Dictionary<uint, int>>();
+        int n = 0;
+        for (int t = 0; t + 2 < mesh.Idx.Length; t += 3)
+        {
+            uint i0 = mesh.Idx[t], i1 = mesh.Idx[t + 1], i2 = mesh.Idx[t + 2];
+            var outDr2 = Vector3.Cross(w[i1] - w[i0], w[i2] - w[i0]);
+            if (outDr2.LengthSquared() == 0) continue;
+            var s = target(t / 3);
+            if (!maps.TryGetValue(s, out var map)) maps[s] = map = new();
+            int V(uint i)
+            {
+                if (map.TryGetValue(i, out var k)) return k;
+                s.Pos.Add(u[i]); s.Nrm.Add(Vector3.Zero); s.Uv.Add(mesh.Uv[i]);
+                return map[i] = s.Pos.Count - 1;
+            }
+            var o0 = ue(w[i0]); var o1 = ue(w[i0] + Vector3.Normalize(outDr2));
+            var outUe = new Vector3((float)(o1.X - o0.X), (float)(o1.Y - o0.Y), (float)(o1.Z - o0.Z));
+            int a = V(i0), bb = V(i1), c = V(i2);
+            var cr = Vector3.Cross(s.Pos[bb] - s.Pos[a], s.Pos[c] - s.Pos[a]);
+            if (Vector3.Dot(cr, outUe) > 0) (bb, c) = (c, bb);
+            s.Nrm[a] += outUe; s.Nrm[bb] += outUe; s.Nrm[c] += outUe;
+            s.Idx.AddRange([(uint)a, (uint)bb, (uint)c]);
+            if (dr2(t / 3)) n++;
+        }
+        return n;
     }
 
     /// UE-space axis-aligned box of a local box under the instance transform.
