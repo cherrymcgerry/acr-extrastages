@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>dr2-extract</AssemblyName>
+    <RootNamespace>Dr2Extract</RootNamespace>
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\third_party\ego.nefsedit\VictorBush.Ego.NefsLib\VictorBush.Ego.NefsLib.csproj" />
+    <ProjectReference Include="..\..\third_party\Ego-Engine-Modding\src\EgoEngineLibrary\EgoEngineLibrary.csproj" />
+  </ItemGroup>
+</Project>
