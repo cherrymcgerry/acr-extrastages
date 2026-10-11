@@ -90,7 +90,10 @@ If anything still looks off, Steam → ACR → Properties → Installed Files �
   `DataLayerToMeshCollisionDataIndices`. Physics-space corners (metres, Y up):
   `(-1014.79, 477.58, 936.71) (-1013.89, 477.91, 942.65) (-1021.80, 478.87, 943.84) (-1022.70, 478.55, 937.91)`.
   The leading edge sits 5 cm under the sampled baked road surface; the far edge is 1 m above it.
-  Position = forward CenterSpline point 274; start line ≈ point 275.
+  Position: point 274 of the **reverse** cell's (`7FF9…`) CenterSpline, ≈ 40 m past the forward start
+  line. The start line is ≈ point 275 there, and ≈ point 17 in the forward cell `22VG…`. (This was
+  first written as "forward CenterSpline", which was wrong; the location is correct, as the in-game jump
+  confirmed.)
 - Both containers are produced with `retoc to-legacy` → edit → `retoc to-zen --version UE5_6`.
   The round trip leaves the `.uexp` byte-identical; the `.uasset` gains one harmless name-map entry.
 

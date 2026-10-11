@@ -57,7 +57,22 @@ Forward set in cell `22VG0QIP9ATUQI633K86KWPFP`; reverse set in `7FF9A0XR2HIRJVF
 
 - `SplinesActor` holds the DMSplineComponents `IdealSpline` (with `DMSplineMetadata`: LeftWidth, …),
   `CenterSpline`, `LeftBorder`, `RightBorder`, `Contour`, and an empty `Pitlane`. The forward variant's
-  actor has `bIsReverse=true`. Forward driving runs toward decreasing CenterSpline point indices.
+  actor has `bIsReverse=true`. Even so, its points are stored **in forward driving order** (279 points):
+  - the car start target lies between points 0 and 17;
+  - the start trigger is at ≈ point 17;
+  - the race sectors are at ≈ 17 / 98 / 180 / 263 (the last is the finish);
+  - the stop zone is at ≈ point 274.
+
+  The reverse cell `7FF9…` holds the same road in the opposite order (289 points, `bIsReverse` unset).
+  Its first point equals the forward cell's last point. [V]
+- Spline details [V]:
+  - Spline points are world-space UE cm: the SplinesActor `Root` has no transform.
+  - `CenterSpline` uses hand-edited tangents on 261 of its 279 points (`CIM_CurveUser`).
+  - The reparam table (10 steps per segment, Legendre-Gauss lengths) is reproduced to within 0.25 cm by
+    `acr-ref stage-selftest`.
+- Each start/sector/finish actor has a `SplineLocationsComponent`. Its only data is a runtime map of
+  actor-space locations, with no baked spline distance. The 4 `RaceSector` trigger boxes are default-sized,
+  so [I] sector detection is by spline distance.
 - `BC_StartSequenceTrigger_C` (box; UE (-96992, 93576, 47829), yaw 84.3) and `BC_EndSequenceTrigger_C`
   (UE (29534, -79891, 39912)); `BC_CompleStartTargetPoint_C` is the car start.
 - `PacenoteSetupActor` → `DT_PacenoteHafrenSouthForward`.
@@ -77,7 +92,7 @@ Physics is **Kunos dmphysics**, not Chaos. The baked asset is a pre-cooked colli
 | Field | Hafren South |
 |---|---|
 | `BakedMeshCollisionData[]` | 734 colliders, 9.29 M vertices, 4.77 M triangles. Each: `Transform` (always identity), `Positions` (f32 xyz), `Colors` (always (0,0,0,1)), `Indices` (u32), `PhysMaterial`, `Owner` (soft path of the source actor). By material: GravelFine 269 colliders / 3.84 M triangles, GravelHard 139, WallBasic 288, WallWood 33, Special 3, HayBale 1, MetalGate 1. |
-| `BakedSimpleCollisionData[]` | 15,326 entries (81 boxes, 17,100 capsules); mostly tree trunks (`PM_WallWoodTreeTrunks`), in UE units |
+| `BakedSimpleCollisionData[]` | 15,326 entries (81 boxes, 17,100 capsules); mostly tree trunks (`PM_WallWoodTreeTrunks`), in UE units. Centres are world-space UE cm (Z 313–496 m), and one is parked at Z −2000 m. [V] |
 | `DataLayerToMeshCollisionDataIndices` / `...SimpleCollisionDataIndices` | map DataLayer name → list of {Index, Num} strides. Key `None` = always active; `DataLayer_<guid>` = colliders that exist only with that layer (rally props such as gates and bales) |
 | `BakedSplinesData` | empty |
 
