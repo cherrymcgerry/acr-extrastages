@@ -19,7 +19,7 @@ internal static class BakedEdit
     const int SerialSizeOffset = 2985;
     const int BulkDataStartOffset = 280;
 
-    sealed class Collider
+    internal sealed class Collider
     {
         public int Start, End, PositionsAt, PhysMatAt, OwnerAt;
         public float[] Positions = [];
@@ -28,8 +28,8 @@ internal static class BakedEdit
         public Vector3 Min, Max;
     }
 
-    sealed class Stride { public uint Index, Num; }
-    sealed class MapEntry { public int NameIndex, NameNumber; public List<Stride> Strides = new(); }
+    internal sealed class Stride { public uint Index, Num; }
+    internal sealed class MapEntry { public int NameIndex, NameNumber; public List<Stride> Strides = new(); }
 
     public static int Run(Options o)
     {
@@ -170,7 +170,7 @@ internal static class BakedEdit
 
     // ---- mesh colliders ----
 
-    static (List<Collider>, int countAt, int end) ParseColliders(byte[] d)
+    internal static (List<Collider>, int countAt, int end) ParseColliders(byte[] d)
     {
         int p = 0;
         var cls = ReadHeader(d, ref p);
@@ -246,7 +246,7 @@ internal static class BakedEdit
     }
 
     /// Height of the highest triangle under (x,z) among the given colliders.
-    static float? GroundHeight(IEnumerable<Collider> colliders, Vector2 q)
+    internal static float? GroundHeight(IEnumerable<Collider> colliders, Vector2 q)
     {
         float? best = null;
         foreach (var c in colliders)
@@ -272,7 +272,7 @@ internal static class BakedEdit
 
     // ---- data-layer stride maps ----
 
-    static (int start, List<MapEntry> meshMap, int simpleMapStart) LocateMaps(byte[] d, int searchFrom)
+    internal static (int start, List<MapEntry> meshMap, int simpleMapStart) LocateMaps(byte[] d, int searchFrom)
     {
         int tail = d.Length - 8;
         if (BitConverter.ToInt32(d, tail) != 0 || BitConverter.ToUInt32(d, tail + 4) != 0x9E2A83C1)
@@ -295,7 +295,7 @@ internal static class BakedEdit
         throw new InvalidDataException("could not locate the data-layer stride maps");
     }
 
-    static List<MapEntry> ReadMap(byte[] d, ref int p)
+    internal static List<MapEntry> ReadMap(byte[] d, ref int p)
     {
         if (BitConverter.ToInt32(d, p) != 0) throw new InvalidDataException("map has keys to remove");
         int n = BitConverter.ToInt32(d, p + 4); p += 8;
@@ -329,7 +329,7 @@ internal static class BakedEdit
         return list;
     }
 
-    static byte[] WriteMap(List<MapEntry> map)
+    internal static byte[] WriteMap(List<MapEntry> map)
     {
         using var ms = new MemoryStream();
         using var w = new BinaryWriter(ms);

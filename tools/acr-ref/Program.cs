@@ -33,6 +33,8 @@ internal static class Program
                 "baked-add-ramp" => BakedEdit.Run(opts),
                 "patch-f32" => PatchF32(opts),
                 "xref" => Xref.Run(opts),
+                "schema" => Schema.Run(opts),
+                "stage-selftest" => StageSelfTest.Run(opts),
                 _ => Fail($"unknown command '{args[0]}'"),
             };
         }
