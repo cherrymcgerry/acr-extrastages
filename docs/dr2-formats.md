@@ -369,7 +369,7 @@ PSSG scenes are read with EgoEngineLibrary (`PssgFile`); `dr2-extract pssg-info`
 - Detail-terrain vertices are `Vertex float3`, `Color uint_color_argb`, two `ST half4` streams (4 UVs), an
   `ST uint_color_argb` stream, `Normal half4` and `Tangent half4`.
 - The extra `uint_color_argb` ST stream makes EgoEngineLibrary's `RenderDataSourceReader` throw, so `RdsReader.cs`
-  reads it instead and ignores that stream. That stream is probably packed layer/material indices [I].
+  reads it instead and ignores that stream. Its meaning is unknown (§5.1).
 - `terrain_array.fx` material textures:
   - `TColourMap`: tile colour map.
   - `TGlobalNormal`.
@@ -396,6 +396,79 @@ They use a newer tpk header (first word `0x66`, format id at `0x28` = 38, width/
 length at `0x38`, payload = the last `length` bytes). **Format 38 is BC7**: the route line is in alpha, with
 start/finish icons. `RouteMapCheck.cs` decodes it with BCnEncoder. EgoEngineLibrary's `TpkFile` does not support
 it; `tpk-to-png` has an experimental fallback (`DR2_TPK38=Bc7 DR2_TPK38_CH=a`).
+
+### 5.1 Terrain shading (`terrain_array.fx`) [V/I per item]
+
+Decoded on NZ01 (`new_zealand_rally_01`) with `dr2-extract terrain-info <tracksplit.pssg> [--vertices] [--stats]`
+(`TerrainInfo.cs`). `stage-ir --bake-ground` (`TerrainBake.cs`) reproduces it; see docs/stage-ir.md.
+
+**Shader constants [V values, I meaning].** Each `terrain_array!N` / `Corner Cutting!N` instance (39 on NZ01) sets
+125 inputs:
+- for each layer slot 1..25: `DifUV`, `WorldUVScale` and `Thickness`;
+- `AoScale`, which is 0 on every instance;
+- `SOLO_*` debug switches.
+
+Textures:
+- `TDiffuse`: the detail array, `nz_ral_set_1_01_d*`, dxt5_srgb, 2048² × 17 slices. RGB is the colour. Alpha
+  averages 0.23-0.68 per slice with a high spread, and is taken to be a height map [I].
+- `TNormal`: the matching normal array.
+- `TColourMap`: the colour map, `nz_master_colourmap_section_*`, dxt1 1024².
+- `TAmbientOcclusion`: the lightmap, `*_lm`, dxt5 512².
+- `TGlobalNormal`.
+- `TSkidMap`, `TSkidMapBlend`, `TSkidMapNormal` and `TWetMask`: dynamic or weather effects, ignored by the bake.
+
+NZ values:
+- `DifUV` = 0 for slots 1-3 and 7-11, 1 otherwise.
+- `WorldUVScale` = 0.125 (one repeat per 8 m) for most slots; 0.031 for slot 17 and on some instances for 5/6/10-12;
+  0.004 for 13-15 and 18+.
+- `Thickness` = 3 for slots 5, 10 and 11, 1 otherwise.
+
+**Vertex streams (stride 52, identical on all 189 terrain instances) [V layout]:**
+
+| stream | content |
+|---|---|
+| `Vertex float3` | position |
+| `Color uint_color_argb` | bytes R, G, B = `slice × 8 + 3` for the triangle's three layers a, b, c [V: the triple is constant per triangle on all 2.9M triangles]. Byte A is mostly 0, meaning unknown [?] |
+| `ST half4` #0 | xy = section atlas UV 0..1 for the colour map and lightmap (a unique, non-planar unwrap) [V]; zw = road-aligned UV that runs along the route [V] |
+| `ST half4` #1 | xy = metric unwrapped UV, about 0.125 per metre [V], unused by the bake; zw = per-vertex layer selector, 0/1 [V] |
+| `ST uint_color_argb` | unknown [?]. r ∈ {0, 255}; g varies 0..255 only on `Corner Cutting` (perhaps the skid-map blend); b ∈ {78, 128, 154, 204} |
+| `Normal half4`, `Tangent half4` | |
+
+**Layer weights [V].** ST1.zw selects the layer: (1,0) = layer a, (0,1) = layer b, (0,0) = layer c. Interpolated
+across the triangle, this gives `wa = z`, `wb = w`, `wc = 1 - z - w`. This mapping was chosen from 81 candidates by
+comparing the layer each vertex selects across shared triangle edges (seams): it agrees at 99.7% of 896,924 seam
+positions. (1,1) occurs only on single-layer triangles.
+
+**Layer UVs [I, visually checked].**
+- `DifUV = 0` layers (the road strips, slices 0-2) use the road-aligned ST0.zw × (`WorldUVScale` / 0.125). With
+  this, the grass verges of slice 1 line up with the road edges.
+- `DifUV = 1` layers use world XZ × `WorldUVScale`. Using ST1.xy × scale / 0.125 instead looks the same.
+
+**Height blend [I].** Hard per-weight blending gives visible triangles. The bake uses a standard height-lerp:
+```
+score_i = w_i + (alpha_i - mean_alpha_i) * 0.5 * Thickness_i
+b_i     = max(score_i - (max_j score_j - 0.2), 0)
+detail  = Σ rgb_i b_i / Σ b_i
+```
+The constants 0.5 and 0.2 are tuned by eye. DR2's exact formula is unknown.
+
+**Colour map and lightmap [I].** Both are grey-centred: the colour maps average about 0.49 in raw bytes. The bake
+treats both as raw (not sRGB-decoded) data and multiplies by 2:
+```
+final = detail × 2 · colourmap × 2 · lightmap
+```
+All 12 NZ lightmaps have the same flat mean (0.494, 0.490, 0.494), and `AoScale` is 0, so the lightmap is
+practically neutral on this stage.
+
+**Road decals (`decal_ao.fx`, `DECAL_i_j`) [I].**
+- Texture: `nz_ral_decal_08_d`, BC7_srgb.
+- UV0 is the decal UV, UV1 is the lightmap UV, and vertex-colour alpha is the opacity.
+- They overlay the terrain as decal × 2 · lightmap, alpha-blended.
+- They add the wheel ruts. They sit on top of the road layers, so the road is not drawn twice.
+
+**Reference.** The `LOW_i_j` tiles (`terrain_lod.fx`, `low_*_d` textures) are DR2's own pre-baked low-LOD colour.
+The bake's overview (`ground_bake/overview.png`) matches DR2's (`overview_dr2_lowlod.png`) in road placement, hue
+and large-scale variation.
 
 ## 6. Coordinate system
 
@@ -433,6 +506,8 @@ dr2-extract track-to-gltf|track-info|ground-height <track.jpk> ...
 dr2-extract pssg-info|pssg-to-gltf <file.pssg> ...
 dr2-extract catalog                               all rally stages + surface survey (work/dr2/catalog.{json,md})
 dr2-extract stage-ir <stage_id> [--render]        stage IR (docs/stage-ir.md)
+dr2-extract stage-ir <stage_id> --bake-ground [--bake-only]   pre-painted ground tiles (§5.1)
+dr2-extract terrain-info <tracksplit.pssg> [--node N] [--vertices] [--stats]   terrain shader/stream analysis
 dr2-extract stage-ir --all [--render]             every stage + work/ir/report.md
 dr2-extract pacenote-survey                       codriver field statistics + geometry checks (work/dr2/pacenote-survey.md)
 dr2-extract route-map-check                       handedness fit of every stage against its route map

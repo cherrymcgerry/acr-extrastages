@@ -106,7 +106,7 @@ internal static partial class StageTextures
     }
 
     /// One texture-array slice as a DX10 DDS (all mips of the slice, as stored in its image block).
-    static byte[] SliceDds(PssgTexture t, byte[] data)
+    internal static byte[] SliceDds(PssgTexture t, byte[] data)
     {
         uint dxgi = t.TexelFormat switch
         {

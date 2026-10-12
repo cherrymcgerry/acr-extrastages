@@ -292,11 +292,57 @@ origin lies within `corridor_m` of the centreline are kept.
 - `kind` is one of `terrain_detail`, `terrain_decals`, `terrain_low_lod` or `vista`.
 - The glb files have one node and mesh per DR2 render tile, with transforms baked into the vertices. Vertex
   attributes are POSITION, NORMAL, COLOR_0 and TEXCOORD_0/1.
-  - On terrain, COLOR_0 is DR2's per-vertex colour stream, most likely terrain layer blend weights (not verified).
+  - On terrain, COLOR_0 is DR2's per-vertex colour stream. It holds the indices of the triangle's three detail
+    layers, not blend weights (docs/dr2-formats.md §5.1).
   - TEXCOORD_0/1 are the first two UV sets.
 - glTF materials are placeholders named after the DR2 shader instance. `<name>.materials.json` lists per material
   the `shader_group` (`terrain_array.fx`, `decal_ao.fx`, ...) and `textures[]` as `{parameter, texture}`, e.g.
   `TColourMap = #nz_01_a_01_d.tga`. Textures are not embedded. `pssg-to-gltf --textures` can dump them as DDS.
+
+### ground_bake (`--bake-ground`)
+
+`stage-ir <stage> --bake-ground` bakes DR2's terrain shading (docs/dr2-formats.md §5.1) into top-down colour tiles
+under `render/ground_bake/`, for a single opaque base-colour material. stage.json gets a `ground_bake` summary.
+With `--bake-only`, it bakes only the tiles and leaves the rest of the IR untouched. It works on any stage whose
+`tracksplit.pssg` uses `terrain_array.fx`.
+
+Options:
+- `--bake-high-res` (default 0.05 m/px) and `--bake-low-res` (0.5).
+- `--bake-high-corridor` (200 m from the route centreline). The low tier covers the full render corridor.
+- `--bake-tile` (2048 px).
+- `--bake-budget-mb` (150). If the high tier would push the BC1 total over this, its resolution is coarsened in
+  4% steps until it fits.
+- `--bake-exclude-road`: replace the road layers with the most-used off-road layer, so the road can carry its own
+  material.
+- `--bake-no-decals`.
+- `--bake-uv A|B|C|D`: layer-UV experiments; A is the decoded one.
+- `--bake-probe [size | x,z,size]`: write a 5 cm/px test PNG at the start (or at x,z) and stop.
+
+Output:
+- `<tier>_<i>_<j>.dds`: BC1, sRGB colour, full mip chain, `tile_px`².
+- `<tier>_<i>_<j>.png`: a 256 px preview of the tile.
+- `<tier>_<i>_<j>_road.png`: 8-bit, ¼ resolution. The share of road layers (detected per stage: layers with more
+  than 60% of their area inside the gate road band) in each pixel's blend. Use it to separate or mask the road.
+- `overview.png`: the low tier as a mosaic.
+- `overview_dr2_lowlod.png`: DR2's own pre-baked low-LOD terrain (`LOW_*`) over the same area, for comparison.
+- `closeup_start.png`: about 80 m of the high tier around the start gate.
+- `manifest.json` (schema `ground_bake/1`): the formula, the detected road layers, the tiers, the total
+  `dds_bytes`, triangle-assignment statistics, and `tiles[]`.
+
+Each `tiles[]` entry is `{name, tier, dds, preview, road_mask, px, m_per_px, size_m, bounds, assign_bounds}`, with
+bounds as `{min_x, min_z, max_x, max_z}` in IR coordinates.
+
+**Using the tiles.**
+1. Assign each terrain triangle to the high tile whose `assign_bounds` contains its centroid; if none does, to the
+   low tile whose `assign_bounds` contains it. The `assign_bounds` of tiles in the same tier do not overlap.
+2. Inside a tile, `u = (x - bounds.min_x) / size_m` and `v = (z - bounds.min_z) / size_m`. v = 0 is the first row
+   of the DDS, which is image top.
+3. `bounds` is `assign_bounds` plus a margin (the p99.9 triangle reach), so the triangles of a tile stay inside its
+   texture. The manifest's `triangles.fully_inside_tile` counts how many do.
+
+On the reference stage, the bake gives 45 high tiles (14.4 cm/px; 5 cm would need about 1 GB) and 6 low tiles
+(50 cm/px), 143 MB of DDS in total. 1,302,285 of 1,302,308 corridor triangles lie fully inside their tile, none is
+unassigned, and the bake takes about 1.5 min.
 
 ### validation
 

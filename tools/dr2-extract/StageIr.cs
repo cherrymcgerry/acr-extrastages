@@ -39,17 +39,18 @@ internal static partial class StageIr
     [GeneratedRegex(@"^(?<loc>[a-z0-9_]+)_route_(?<route>\d+)$")]
     private static partial Regex StageId();
 
-    private sealed record Options(string OutRoot, float Corridor, SurfaceMap SurfaceMap, bool Render);
+    private sealed record Options(string OutRoot, float Corridor, SurfaceMap SurfaceMap, bool Render, GroundBakeOptions? Bake);
 
     public static async Task<int> Run(string[] args)
     {
         var root = Program.Option(args, "--dr2") ?? Dr2Install.DefaultRoot;
         var outRoot = Program.Option(args, "--out") ?? Path.Combine("work", "ir");
         var cache = Program.Option(args, "--cache") ?? Path.Combine("work", "dr2", "cache");
-        var options = new Options(outRoot,
-            float.Parse(Program.Option(args, "--corridor") ?? "250", CultureInfo.InvariantCulture),
+        var corridorM = float.Parse(Program.Option(args, "--corridor") ?? "250", CultureInfo.InvariantCulture);
+        var options = new Options(outRoot, corridorM,
             SurfaceMap.Load(Program.Option(args, "--surface-map") ?? Path.Combine("config", "surface-map.toml")),
-            args.Contains("--render"));
+            args.Contains("--render"),
+            args.Contains("--bake-ground") ? GroundBakeOptions.Parse(args, corridorM) : null);
         var install = await Dr2Install.OpenAsync(root, cache);
 
         if (args.Contains("--all"))
@@ -73,6 +74,13 @@ internal static partial class StageIr
         {
             throw new FileNotFoundException($"{stage.RouteDir}/progress_track.xml not found; {location} routes: " +
                 string.Join(", ", install.List($"{stage.LocDir}/route_").Select(p => p.Split('/')[4]).Distinct()));
+        }
+
+        if (options.Bake is not null && args.Contains("--bake-only"))
+        {
+            var progress = ProgressTrack.Load(await install.FetchAsync($"{stage.RouteDir}/progress_track.xml"));
+            await TerrainBake.Run(install, stage, progress, Path.Combine(outRoot, stage.Id), options.Bake);
+            return 0;
         }
 
         await Build(install, stage, options);
@@ -227,6 +235,8 @@ internal static partial class StageIr
                 });
             }
         }
+
+        var groundBake = options.Bake is null ? null : await TerrainBake.Run(install, st, progress, outDir, options.Bake);
 
         var objects = await BuildObjects(install, st, inCorridor, options, outDir, ground.Cells);
         renderTriangles += objects?.RenderTriangles ?? 0;
@@ -391,6 +401,7 @@ internal static partial class StageIr
             }).ToList(),
             ["objects"] = objects?.Json,
             ["render"] = renderEntries,
+            ["ground_bake"] = groundBake,
             ["validation"] = new
             {
                 ground_height_at_gates = new

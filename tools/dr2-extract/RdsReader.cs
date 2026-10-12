@@ -19,8 +19,12 @@ internal sealed class RdsReader
     private readonly Attribute? _normal;
     private readonly Attribute? _color;
     private readonly List<Attribute> _uvSets = [];
+    private readonly List<(string RenderType, Attribute Attr)> _all = [];
 
     public int IndexCount { get; }
+
+    /// <summary>Every stream as (render type, data type), in declaration order.</summary>
+    public IEnumerable<(string RenderType, string DataType)> Layout => _all.Select(a => (a.RenderType, a.Attr.DataType));
 
     public bool HasNormals => _normal is not null;
 
@@ -44,6 +48,7 @@ internal sealed class RdsReader
             var block = stream.GetDataBlock();
             var desc = block.Streams.ElementAt((int)stream.SubStream);
             var attr = new Attribute(desc.DataType, desc.Offset, desc.Stride, block.Data.Value);
+            _all.Add((desc.RenderType, attr));
             switch (desc.RenderType)
             {
                 case "Vertex":
@@ -128,6 +133,27 @@ internal sealed class RdsReader
             "float4" => new Vector4(BinaryPrimitives.ReadSingleBigEndian(s), BinaryPrimitives.ReadSingleBigEndian(s[4..]),
                 BinaryPrimitives.ReadSingleBigEndian(s[8..]), BinaryPrimitives.ReadSingleBigEndian(s[12..])),
             _ => throw new NotSupportedException($"Color data type {_color.DataType}"),
+        };
+    }
+
+    /// <summary>
+    /// Raw element <paramref name="v"/> of the <paramref name="ordinal"/>-th stream of <paramref name="renderType"/>
+    /// as four values: floats/halves as is, <c>uint_color_argb</c> as its bytes in stored order (A R G B, 0..255).
+    /// </summary>
+    public Vector4 Raw(string renderType, int ordinal, uint v)
+    {
+        var a = _all.Where(x => x.RenderType == renderType).ElementAt(ordinal).Attr;
+        var s = Span(a, v);
+        return a.DataType switch
+        {
+            "uint_color_argb" => new Vector4(s[0], s[1], s[2], s[3]),
+            "half4" => new Vector4((float)BinaryPrimitives.ReadHalfBigEndian(s), (float)BinaryPrimitives.ReadHalfBigEndian(s[2..]),
+                (float)BinaryPrimitives.ReadHalfBigEndian(s[4..]), (float)BinaryPrimitives.ReadHalfBigEndian(s[6..])),
+            "half2" => new Vector4((float)BinaryPrimitives.ReadHalfBigEndian(s), (float)BinaryPrimitives.ReadHalfBigEndian(s[2..]), 0, 0),
+            "float2" => new Vector4(BinaryPrimitives.ReadSingleBigEndian(s), BinaryPrimitives.ReadSingleBigEndian(s[4..]), 0, 0),
+            "float4" => new Vector4(BinaryPrimitives.ReadSingleBigEndian(s), BinaryPrimitives.ReadSingleBigEndian(s[4..]),
+                BinaryPrimitives.ReadSingleBigEndian(s[8..]), BinaryPrimitives.ReadSingleBigEndian(s[12..])),
+            _ => throw new NotSupportedException($"raw {renderType} {a.DataType}"),
         };
     }
 
