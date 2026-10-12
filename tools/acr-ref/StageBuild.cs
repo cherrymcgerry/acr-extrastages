@@ -132,6 +132,8 @@ internal static class StageBuild
             if (vo.Dr2) { report["options"]!["visuals_dr2"] = true; report["options"]!["visuals_dr2_revert"] = vo.Dr2Revert; vo.Dr2On("terrain"); }
             if (vo.TerrainUv != "planar") report["options"]!["visuals_terrain_uv"] = vo.TerrainUv;
             if (vo.Ground != "collision") report["options"]!["visuals_ground"] = vo.Ground;
+            if (vo.GroundLod) report["options"]!["visuals_ground_lod"] = true;
+            if (vo.GroundBake is not null) report["options"]!["visuals_ground_bake"] = vo.GroundBake;
         }
         var road = Road(ir, pl);
 
@@ -800,7 +802,8 @@ internal static class StageBuild
                 vo["visuals_vegetation"]?.GetValue<string>() ?? "none", vo["visuals_canopies"]?.GetValue<string>(),
                 vo["visuals_vista"]?.GetValue<bool>() ?? false, vo["visuals_textured"]?.GetValue<bool>() ?? false,
                 vo["visuals_dr2"]?.GetValue<bool>() ?? false, vo["visuals_dr2_revert"]?.GetValue<string>() ?? "",
-                vo["visuals_terrain_uv"]?.GetValue<string>() ?? "planar", vo["visuals_ground"]?.GetValue<string>() ?? "collision");
+                vo["visuals_terrain_uv"]?.GetValue<string>() ?? "planar", vo["visuals_ground"]?.GetValue<string>() ?? "collision",
+                vo["visuals_ground_lod"]?.GetValue<bool>() ?? false, vo["visuals_ground_bake"]?.GetValue<string>());
             RoadProbe? probe = vo["objects"]?.GetValue<string>() is { } objCfg
                 ? new RoadProbe(Road(ir, pl), new SurfaceGrid(Path.Combine(ir.Dir, "collision.glb"), pl), Toml.Load(objCfg)) : null;
             failures += Visuals.Check(new LegacyPackage(HostPaths.Resolve(root, HostPaths.Cell)), ir, pl, Toml.Load(visualsCfg), opt, w,

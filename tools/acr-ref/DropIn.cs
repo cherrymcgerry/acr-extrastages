@@ -147,6 +147,13 @@ internal sealed class Dr2Materials
         return Texture(ddsName, dds.Format, linear, dds.Width, dds.Height, dds.Mips);
     }
 
+    /// A Texture2D from a DDS outside the stage textures folder (e.g. render/ground_bake tiles), under the given name.
+    public string TextureFromFile(string ddsPath, string name, bool linear = false)
+    {
+        var dds = new Dds(ddsPath);
+        return Texture(name, dds.Format, linear, dds.Width, dds.Height, dds.Mips);
+    }
+
     string Orm()
     {
         var c = _cfg.Arr("dr2_textures", "orm").Select(x => Convert.ToByte(x)).ToArray();

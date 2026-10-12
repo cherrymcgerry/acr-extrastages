@@ -32,9 +32,13 @@ internal static class Visuals
     ///        edges) | render (v1.10: DR2's render terrain, render/terrain.glb, minus its triangles under the collision
     ///        road; collision ground only where the render terrain has none; the road section raised by [ground]
     ///        road_lift_cm against z-fighting with the coplanar render terrain at its edges)
+    ///   groundLod: (v1.11, render ground) error-bounded simplification, tolerance by distance from the route
+    ///        ([ground] simplify_*; GroundLod.Simplify); also keeps DR2's own triangle winding (RenderGround keepWinding)
+    ///   groundBake: (v1.11, render ground + dr2) DR2 ground-bake manifest (render/ground_bake/manifest.json): one terrain
+    ///        section, texture and MIC per tile, tile UVs (GroundLod.Split); null = one terrain section, box UVs
     internal sealed record Options(string Host, bool Retarget, string? Owner, string Vegetation = "none", string? Canopies = null,
                                    bool Vista = false, bool Textured = false, bool Dr2 = false, string Dr2Revert = "",
-                                   string TerrainUv = "planar", string Ground = "collision")
+                                   string TerrainUv = "planar", string Ground = "collision", bool GroundLod = false, string? GroundBake = null)
     {
         public static Options From(IReadOnlyDictionary<string, string> named) => new(
             named.GetValueOrDefault("visuals-host", "start"),
@@ -47,7 +51,9 @@ internal static class Visuals
             named.GetValueOrDefault("visuals-dr2", "0") != "0",
             named.GetValueOrDefault("visuals-dr2-revert", ""),
             named.GetValueOrDefault("visuals-terrain-uv", "planar"),
-            named.GetValueOrDefault("visuals-ground", "collision"));
+            named.GetValueOrDefault("visuals-ground", "collision"),
+            named.GetValueOrDefault("visuals-ground-lod", "0") != "0",
+            named.GetValueOrDefault("visuals-ground-bake") is { Length: > 0 } gb ? gb : null);
 
         public static readonly string[] Dr2Sections = ["terrain", "road", "vista", "objects"];
 
@@ -118,7 +124,17 @@ internal static class Visuals
                 AddTri(target, Add(a0), Add(b0), Add(c0));
             }
         }
-        if (opt.Ground == "render") (terrain, r["ground"]) = RenderGround(ir, pl, cfg, terrain, road);
+        if (opt.Ground == "render") (terrain, r["ground"]) = RenderGround(ir, pl, cfg, terrain, road, keepWinding: opt.GroundLod);
+        if (opt.GroundLod)
+        {
+            if (opt.Ground != "render") throw new ArgumentException("--visuals-ground-lod needs --visuals-ground render");
+            var route = new GroundLod.RouteDistance(ir.Centre.Select(pl.ToUe).Select(q => new Vector2((float)q.X, (float)q.Y)));
+            var (sp, si, srep) = GroundLod.Simplify(terrain, route, GroundLod.Tolerance(cfg));
+            terrain = new ProcMesh.Section();
+            foreach (var p in sp) { terrain.Pos.Add(p); terrain.Nrm.Add(Vector3.Zero); terrain.Uv.Add(new Vector2(p.X / 400, p.Y / 400)); }
+            for (int t = 0; t + 2 < si.Count; t += 3) AddTriKeep(terrain, (int)si[t], (int)si[t + 1], (int)si[t + 2]);
+            r["ground"]!["simplified"] = srep;
+        }
         else if (opt.Ground != "collision") throw new ArgumentException($"--visuals-ground must be collision or render, not {opt.Ground}");
         foreach (var s in new[] { terrain, road }) for (int i = 0; i < s.Nrm.Count; i++) s.Nrm[i] = s.Nrm[i] == Vector3.Zero ? Vector3.UnitZ : Vector3.Normalize(s.Nrm[i]);
 
@@ -181,7 +197,27 @@ internal static class Visuals
             for (int i = 0; i < terrain.Uv.Count; i++) terrain.Uv[i] *= k;
         }
         int terrainMat = Mat(ground, "terrain"), roadMat = Mat(ground, "road");
-        if (opt.Dr2On("terrain"))
+        var bakeSections = new List<(string name, ProcMesh.Section s, int mat)>();
+        if (opt.GroundBake is { } manifest)
+        {
+            // section 1 = the first tile, further tiles after the gates; triangles over no tile keep the grass slice below
+            if (!opt.Dr2On("terrain") || opt.Ground != "render") throw new ArgumentException("--visuals-ground-bake needs --visuals-dr2 (terrain not reverted) and --visuals-ground render");
+            var tiles = GroundLod.LoadTiles(manifest);
+            var (used, rest, brep) = GroundLod.Split(terrain, pl, tiles);
+            var dir = Path.GetDirectoryName(manifest)!;
+            foreach (var (tile, s) in used)
+                bakeSections.Add(($"terrain:{tile.Name}", s, MatPath(dr2!.Mic("bake_" + tile.Name, dr2.TextureFromFile(Path.Combine(dir, tile.Dds), "ground_bake_" + tile.Name)))));
+            terrain = bakeSections[0].s; terrainMat = bakeSections[0].mat;
+            bakeSections.RemoveAt(0);
+            if (rest.Idx.Count > 0)
+            {
+                dr2Rep["terrain_uv"] = BoxUv(rest, (float)(cfg.Num("dr2_textures", "terrain_tile_m") * 100));
+                bakeSections.Add(("terrain:rest", rest, MatPath(dr2!.Mic("terrain", dr2.Texture(cfg.Str("dr2_textures", "terrain"))))));
+            }
+            dr2Rep["terrain"] = $"ground bake {manifest}: {used.Count} tile sections" + (rest.Idx.Count > 0 ? $", {rest.Idx.Count / 3} triangles over no tile on {cfg.Str("dr2_textures", "terrain")}" : "");
+            dr2Rep["ground_bake"] = brep;
+        }
+        else if (opt.Dr2On("terrain"))
         {
             // DR2 detail slice tiled every terrain_tile_m (the v1.7 UVs tile every terrain_uv_m)
             float k = (float)(cfg.Num("textured", "terrain_uv_m") / cfg.Num("dr2_textures", "terrain_tile_m"));
@@ -202,6 +238,7 @@ internal static class Visuals
         var mats = new List<int> { 0, terrainMat, roadMat, Mat("materials", "posts"), Mat("materials", "gates") };
         var sections = new List<ProcMesh.Section> { dummy, terrain, road, posts, gates };
         var sectionNames = new JsonArray("dummy", "terrain", "road", "posts", "gates");
+        foreach (var (name, s, mat) in bakeSections) { sections.Add(s); mats.Add(mat); sectionNames.Add(name); }
         if (objects is not null && cfg.Num("objects", "enabled") != 0)
         {
             var objJson = opt.Dr2On("objects")
@@ -244,7 +281,7 @@ internal static class Visuals
         }
         if (opt.Vista)
         {
-            var (vista, vr) = BuildVista(ir, pl, cfg, terrain, road, colourMapUv: opt.Dr2On("vista"));
+            var (vista, vr) = BuildVista(ir, pl, cfg, [terrain, road, .. bakeSections.Select(b => b.s)], colourMapUv: opt.Dr2On("vista"));
             int vistaMat;
             if (opt.Dr2On("vista"))
             {
@@ -306,7 +343,9 @@ internal static class Visuals
         }
         cell.SetExportData(e, data);
 
-        r["terrain"] = $"{terrain.Pos.Count} vertices, {terrain.Idx.Count / 3} triangles";
+        var allTerrain = bakeSections.Select(b => b.s).Prepend(terrain).ToList();
+        r["terrain"] = $"{allTerrain.Sum(s => s.Pos.Count)} vertices, {allTerrain.Sum(s => s.Idx.Count / 3)} triangles" +
+                       (bakeSections.Count > 0 ? $" in {allTerrain.Count} sections" : "");
         r["road"] = $"{road.Pos.Count} vertices, {road.Idx.Count / 3} triangles (codes {string.Join(", ", roadCodes)})";
         r["edge_posts"] = postCount;
         r["edge_posts_first"] = postCentres;
@@ -440,6 +479,10 @@ internal static class Visuals
         int p = c.Slots[3].at; int n = BitConverter.ToInt32(c.Data, p); p += 4;
         var secs = new List<ProcMesh.Section>();
         for (int i = 0; i < n; i++) secs.Add(ProcMesh.ReadSection(c.Data, ref p, out _));
+        var secNames = (visualsReport?["sections"] as JsonArray)?.Select(x => x!.GetValue<string>()).ToList();
+        // section 1 and, with the ground bake, every further tile section (terrain:<tile>, terrain:rest)
+        var terrainIdx = Enumerable.Range(0, n).Where(i => i == 1 || secNames is not null && i < secNames.Count && secNames[i].StartsWith("terrain:")).ToList();
+        var terrainSecs = terrainIdx.Select(i => secs[i]).ToList();
         C(n >= 5 && secs.All(s => !s.Collision), $"visuals: {n} sections, none with collision ({string.Join(", ", secs.Select(s => $"{s.Pos.Count} v / {s.Idx.Count / 3} t"))})");
         C(secs.All(s => s.Idx.All(i => i < s.Pos.Count)) && secs.All(s => s.Idx.Count % 3 == 0 && s.Idx.Count > 0), "visuals: all indices in range, no empty section");
         var mats = c.Slots.TryGetValue(7, out var m) && !m.zero ? BitConverter.ToInt32(c.Data, m.at) : 0;
@@ -465,7 +508,7 @@ internal static class Visuals
             for (int i = 0; i < n; i++)
             {
                 var name = names[i]!.GetValue<string>();
-                if (name is "dummy" or "terrain" or "road" or "gates") continue;
+                if (name is "dummy" or "terrain" or "road" or "gates" || name.StartsWith("terrain:")) continue;
                 bool soft = name == "objects:soft", isPosts = name == "posts";
                 double limit = isPosts ? cfg.Num("markers", "post_width_m") * 75 : soft ? 0 : probe.MaxPen + tol;
                 var s = secs[i];
@@ -522,11 +565,22 @@ internal static class Visuals
             }
         }
         else if (probe is not null) C(false, "visuals road corridor: section names missing from the report");
+        var boxSecs = new List<ProcMesh.Section> { secs[1] };
+        if (opt.GroundBake is not null)
+        {
+            var tileIdx = terrainIdx.Where(i => secNames?[i] != "terrain:rest").ToList();
+            int uvOut = tileIdx.Sum(i => secs[i].Uv.Count(u => u.X < 0 || u.X > 1 || u.Y < 0 || u.Y > 1));
+            int verts = tileIdx.Sum(i => secs[i].Pos.Count);
+            int rest = terrainIdx.Where(i => secNames?[i] == "terrain:rest").Sum(i => secs[i].Idx.Count / 3);
+            C(secNames is not null && tileIdx.Count > 0 && uvOut == 0,
+              $"visuals: ground bake: {tileIdx.Count} tile sections, UV0 inside the tile texture (0..1) on all {verts} vertices ({uvOut} outside); {rest} triangles over no tile");
+            boxSecs = terrainIdx.Where(i => secNames?[i] == "terrain:rest").Select(i => secs[i]).ToList();
+        }
         if (opt.Dr2On("terrain"))
+        foreach (var tr in boxSecs)
         {
             // UV area (in texture repeats x repeat size) over true area per triangle: 1 = no stretch; top-down planar UVs
             // tend to 0 on steep faces (long streaks), box projection keeps at least 1/sqrt(3)
-            var tr = secs[1];
             double rep = cfg.Num("dr2_textures", "terrain_tile_m") * 100, minRatio = double.MaxValue;
             int steep = 0, nTri = 0;
             for (int t = 0; t + 2 < tr.Idx.Count; t += 3)
@@ -592,12 +646,12 @@ internal static class Visuals
           $"visuals: {count} edge posts every {spacing} m on both gate edges (max offset {worst:0.00} cm; mean road width {width:0.0} m)");
 
         // ground: the terrain + road sections cover the placed DR2 centreline
-        var ground = secs[1].Pos.Concat(secs[2].Pos).ToList();
+        var ground = terrainSecs.SelectMany(s => s.Pos).Concat(secs[2].Pos).ToList();
         var (mn, mx) = ProcMesh.Bounds(ground);
         var cl = ir.Centre.Select(pl.ToUe).ToList();
         C(cl.All(q => q.X >= mn.X && q.X <= mx.X && q.Y >= mn.Y && q.Y <= mx.Y) && secs[2].Idx.Count > 0,
           $"visuals: ground mesh {ground.Count} vertices covers all {cl.Count} centreline points; road section {secs[2].Idx.Count / 3} triangles");
-        if (opt.Ground == "render") failures += CheckRenderGround(ir, pl, cfg, secs[1], secs[2], C);
+        if (opt.Ground == "render") failures += CheckRenderGround(ir, pl, cfg, terrainSecs, secs[2], C);
         return failures;
     }
 
@@ -678,7 +732,7 @@ internal static class Visuals
     /// drawn terrain vertices near the centreline match its height (the two DR2 meshes are triangulated differently, so
     /// small differences between their vertices are expected); the drawn ground has no holes near the route.
     /// Returns 0: failures are counted by C.
-    static int CheckRenderGround(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ProcMesh.Section terrain, ProcMesh.Section road, Action<bool, string> C)
+    static int CheckRenderGround(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, List<ProcMesh.Section> terrain, ProcMesh.Section road, Action<bool, string> C)
     {
         var sg = new SurfaceGrid(Path.Combine(ir.Dir, "collision.glb"), pl);
         double lift = cfg.Num("ground", "road_lift_cm");
@@ -703,7 +757,7 @@ internal static class Visuals
         // surface heights at the same plan points (every 1 m within 15 m of the centreline), up-facing triangles only:
         // on steep banks a vertex-to-surface comparison mostly measures the two triangulations' plan offsets
         var drawn = new TopSurface(); var collision = new TopSurface();
-        foreach (var s in new[] { terrain, road })
+        foreach (var s in terrain.Append(road))
             for (int t = 0; t + 2 < s.Idx.Count; t += 3) drawn.Add(s.Pos[(int)s.Idx[t]], s.Pos[(int)s.Idx[t + 1]], s.Pos[(int)s.Idx[t + 2]]);
         foreach (var prim in new Glb(Path.Combine(ir.Dir, "collision.glb")).Primitives())
         {
@@ -751,7 +805,7 @@ internal static class Visuals
         }
 
         var covered = new PlanMask(100);
-        foreach (var s in new[] { terrain, road })
+        foreach (var s in terrain.Append(road))
             for (int t = 0; t + 2 < s.Idx.Count; t += 3) covered.Add(s.Pos[(int)s.Idx[t]], s.Pos[(int)s.Idx[t + 1]], s.Pos[(int)s.Idx[t + 2]]);
         double reach = cfg.Num("ground", "hole_check_m") * 100;
         var seen = new HashSet<(int, int)>(); int samples = 0, holes = 0; var first = new List<string>();
@@ -779,14 +833,17 @@ internal static class Visuals
     /// which only covers a ribbon along the road. Render triangles whose vertices, edge midpoints and centre all lie over the collision
     /// road (cells of [ground] road_mask_cm) are dropped, the road section stays (RoadUv) and is raised by road_lift_cm:
     /// both meshes share heights over the road. Collision ground triangles over no render terrain are kept as a fill.
-    static (ProcMesh.Section, JsonObject) RenderGround(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ProcMesh.Section collisionTerrain, ProcMesh.Section road)
+    /// keepWinding (v1.11): render triangles keep DR2's winding (per mesh, turned so most of it faces up) instead of each
+    /// being turned to face up, which turned folded or overhanging faces away from the camera (back-face culled).
+    static (ProcMesh.Section, JsonObject) RenderGround(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ProcMesh.Section collisionTerrain, ProcMesh.Section road,
+                                                       bool keepWinding = false)
     {
         var roadMask = new PlanMask(cfg.Num("ground", "road_mask_cm"));
         for (int t = 0; t + 2 < road.Idx.Count; t += 3) roadMask.Add(road.Pos[(int)road.Idx[t]], road.Pos[(int)road.Idx[t + 1]], road.Pos[(int)road.Idx[t + 2]]);
         var covered = new PlanMask(cfg.Num("ground", "fill_cell_cm"));
 
         var terrain = new ProcMesh.Section();
-        int source = 0, cropped = 0, underRoad = 0;
+        int source = 0, cropped = 0, underRoad = 0, againstUp = 0;
         var perMat = new Dictionary<string, int>();
         foreach (var prim in new Glb(Path.Combine(ir.Dir, "render", "terrain.glb")).Primitives())
         {
@@ -805,6 +862,11 @@ internal static class Visuals
                 terrain.Pos.Add(ue[v]); terrain.Nrm.Add(Vector3.Zero); terrain.Uv.Add(new Vector2(ue[v].X / 400, ue[v].Y / 400));
                 return map[v];
             }
+            // keepWinding: the mesh's own winding, turned so that most of it faces up (UE front face: cross points down)
+            int upVotes = 0;
+            for (int t = 0; t + 2 < prim.Indices.Length; t += 3)
+                upVotes += Math.Sign(Vector3.Cross(ue[prim.Indices[t + 1]] - ue[prim.Indices[t]], ue[prim.Indices[t + 2]] - ue[prim.Indices[t]]).Z);
+            bool flip = upVotes > 0;
             for (int t = 0; t + 2 < prim.Indices.Length; t += 3)
             {
                 source++;
@@ -813,7 +875,10 @@ internal static class Visuals
                 if (g.X < StageBuild.PhysMinX * 100 || g.X > StageBuild.PhysMaxX * 100 || g.Y < StageBuild.PhysMinZ * 100 || g.Y > StageBuild.PhysMaxZ * 100) { cropped++; continue; }
                 covered.Add(ue[a], ue[b], ue[c]);
                 if (new[] { ue[a], ue[b], ue[c], g, (ue[a] + ue[b]) / 2, (ue[b] + ue[c]) / 2, (ue[c] + ue[a]) / 2 }.All(q => roadMask[q])) { underRoad++; continue; }
-                AddTri(terrain, Add(a), Add(b), Add(c));
+                if (!keepWinding) AddTri(terrain, Add(a), Add(b), Add(c));
+                else if (flip) { int ia = Add(a), ic = Add(c), ib = Add(b); AddTriKeep(terrain, ia, ic, ib); }
+                else { int ia = Add(a), ib = Add(b), ic = Add(c); AddTriKeep(terrain, ia, ib, ic); }
+                if (keepWinding && Vector3.Cross(ue[b] - ue[a], ue[c] - ue[a]).Z * (flip ? -1 : 1) > 0) againstUp++;
                 var key = prim.Material.Split('!')[0];
                 perMat[key] = perMat.GetValueOrDefault(key) + 1;
             }
@@ -852,6 +917,7 @@ internal static class Visuals
             ["collision_terrain_triangles_not_drawn"] = collisionTris - fill,
             ["road_lift_cm"] = lift,
         };
+        if (keepWinding) r["dr2_winding_kept"] = $"{againstUp} drawn triangles face down as DR2 wound them (folds, overhangs)";
         Console.WriteLine($"visuals: render ground {source - cropped - underRoad} of {source} terrain.glb triangles ({cropped} outside the physics bounds, " +
                           $"{underRoad} under the collision road), {fill} collision fill triangles, road raised {lift} cm");
         return (terrain, r);
@@ -890,13 +956,13 @@ internal static class Visuals
 
     /// colourMapUv: UV1 = the DR2 glb plan position over the vista's plan bounds (0..1; how DR2's large vista colour map
     /// lies, see acr-ref vista-map).
-    static (ProcMesh.Section, JsonObject) BuildVista(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ProcMesh.Section terrain, ProcMesh.Section road,
+    static (ProcMesh.Section, JsonObject) BuildVista(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, IReadOnlyList<ProcMesh.Section> groundSecs,
                                                      bool colourMapUv = false)
     {
         double cellSize = cfg.Num("vista", "exclude_cell_m") * 100;
         (long, long) Key(float x, float y) => ((long)Math.Floor(x / cellSize), (long)Math.Floor(y / cellSize));
         var ground = new HashSet<(long, long)>();
-        foreach (var s in new[] { terrain, road })
+        foreach (var s in groundSecs)
             for (int t = 0; t + 2 < s.Idx.Count; t += 3)
                 foreach (var k in new[] { 0, 1, 2 }) { var v = s.Pos[(int)s.Idx[t + k]]; ground.Add(Key(v.X, v.Y)); }
 
@@ -954,6 +1020,14 @@ internal static class Visuals
         Console.WriteLine($"visuals: vista {r["triangles"]} of {source} triangles ({dropped} under the drawn ground dropped), " +
                           $"nearest vertex {r["nearest_to_centreline_m"]} m from the centreline, bounds {r["bounds_m"]}");
         return (vista, r);
+    }
+
+    /// Adds a triangle as wound (UE front face: cross(b - a, c - a) points against the normal) and accumulates normals.
+    static void AddTriKeep(ProcMesh.Section s, int a, int b, int c)
+    {
+        var up = -Vector3.Cross(s.Pos[b] - s.Pos[a], s.Pos[c] - s.Pos[a]);
+        s.Nrm[a] += up; s.Nrm[b] += up; s.Nrm[c] += up;
+        s.Idx.Add((uint)a); s.Idx.Add((uint)b); s.Idx.Add((uint)c);
     }
 
     /// Adds a triangle facing up (UE front face: cross(b - a, c - a) points against the normal) and accumulates normals.

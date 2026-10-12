@@ -732,3 +732,50 @@ Check:
 Install:
 1. Remove every previous `zz_acrdirt_*` file from `~mods`.
 2. Copy the three files from `work\acr\dist-v1.10` into `~mods`.
+
+## v1.11 test: lighter ground, DR2's baked ground colours
+
+`work\acr\dist-v1.11\zz_acrdirt_nz01r5_P.*`: v1.10 with the ground simplified, DR2's own triangle winding kept, and
+DR2's baked ground colour tiles on it. Build: `.\mods\acrdirt-stage\build.ps1 -Version v1.11 -Verify`, about 2 minutes
+(`-GroundBake off` keeps the v1.10 grass slice instead).
+- Offline: 191 PASS / 0 FAIL. Sizes: ucas 616,246,438, utoc 127,317, pak 347.
+- Physics is byte-identical to v1.9 and v1.10.
+
+What changed from v1.10:
+1. **Performance:** the render terrain is simplified by edge collapse, with an error bound that grows with distance
+   from the route ([ground] `simplify_*`: RMS 2 cm within 10 m, 5 cm at 30 m, 10 cm at 60 m, 25 cm at 150 m, 60 cm at
+   300 m, 1.5 m from 600 m).
+   - The cut along the road and the mesh edges never move, so there are no cracks.
+   - Terrain: 1,083,302 -> 404,229 triangles in 6 s. Total: 1,232,601 (v1.9: 1,519,474; v1.10: 1,911,701).
+   - Most of DR2's terrain detail is within 30 m of the road (1.10 M of 1.30 M triangles), so a "full detail within
+     60 m" rule could not reach v1.9's count. Near the road the bound is centimetres instead.
+   - The alignment checks are unchanged: within 5 m of the centreline the 99th percentile is 3.8 cm, including the
+     2 cm road raise.
+   - Culling (engine source, UE4-era ProceduralMeshComponent): the visuals mesh is culled as one component. Its
+     sections each get their own draw call but share the component's bounds, so splitting the terrain into more
+     sections does not cull more.
+2. **Holes and sheets at 0.3 km (inferred):**
+   - Not missing ground: DR2's render terrain covers that hillside (only 171 m² within 60 m of the whole route have
+     none).
+   - Up to v1.10 every ground triangle was turned to face up. DR2's terrain has about 66,000 triangles that face down
+     as DR2 wound them (folds, overhangs); the 200–400 m stretch has many of them. Turned up, they face away from the
+     camera and are not drawn.
+   - v1.11 keeps DR2's own winding.
+3. **Ground bake:** DR2's baked ground colour, from `work/ir/<stage>/render/ground_bake/manifest.json`.
+   - 45 of the 51 tiles are used, each with its own texture (BC1 2048 px with mips), material (parent M_Simple) and
+     terrain section. UVs follow the tile bounds.
+   - Simplified triangles that reach past their tile go to a tile that holds all their vertices (67). The 2 held by
+     none keep the grass slice.
+   - Our road section is still drawn on top (2 cm higher), as before.
+
+Check:
+1. **Ground colour:** DR2's colours and detail on the hills, verges and banks; no tile seams or wrong-coloured squares.
+   The fine horizontal stripes of v1.10 should be gone.
+2. **Hillside at 0.3 km (right):** are the sky patches and floating sheets gone or fewer?
+3. **Frame rate:** compare with v1.9 and v1.10.
+4. **Distant hills:** no visible faceting or cracks. Near the road the shape should look the same as v1.10.
+5. As before: the car sits on the road, road texture, objects, start, timer, pacenotes, respawn.
+
+Install:
+1. Remove every previous `zz_acrdirt_*` file from `~mods`.
+2. Copy the three files from `work\acr\dist-v1.11` into `~mods`.

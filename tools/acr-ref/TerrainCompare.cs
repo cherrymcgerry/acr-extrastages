@@ -119,6 +119,32 @@ internal static class TerrainCompare
         return 0;
     }
 
+    /// ground-lod-test --ir <dir> --visuals <visuals.toml> [--ground-offset m]: GroundLod.Simplify on the whole render
+    /// terrain inside the physics bounds (no road cut), for timing and triangle counts.
+    public static int LodTest(Options o)
+    {
+        var ir = StageBuild.Ir.Load(o.Named["ir"]);
+        var pl = StageBuild.Solve(ir, double.Parse(o.Named.GetValueOrDefault("ground-offset", "0"), CultureInfo.InvariantCulture));
+        var cfg = Toml.Load(o.Named["visuals"]);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var s = new ProcMesh.Section();
+        foreach (var prim in new Glb(Path.Combine(ir.Dir, "render", "terrain.glb")).Primitives())
+        {
+            int b = s.Pos.Count;
+            for (int v = 0; v < prim.Positions.Length / 3; v++)
+            {
+                var p = pl.ToPhysics(prim.Positions[v * 3], prim.Positions[v * 3 + 1], prim.Positions[v * 3 + 2]);
+                s.Pos.Add(new((float)(p.X * 100), (float)(p.Z * 100), (float)(p.Y * 100)));
+            }
+            foreach (var i in prim.Indices) s.Idx.Add((uint)(b + i));
+        }
+        Console.WriteLine($"loaded {s.Idx.Count / 3} triangles in {clock.Elapsed.TotalSeconds:0.0} s");
+        var route = new GroundLod.RouteDistance(ir.Centre.Select(pl.ToUe).Select(q => new System.Numerics.Vector2((float)q.X, (float)q.Y)));
+        var (_, idx, rep) = GroundLod.Simplify(s, route, GroundLod.Tolerance(cfg));
+        Console.WriteLine(rep.ToJsonString());
+        return 0;
+    }
+
     public static int Run(Options o)
     {
         var ir = StageBuild.Ir.Load(o.Named["ir"]);
@@ -150,6 +176,38 @@ internal static class TerrainCompare
         }
 
         var rep = new JsonObject { ["collision"] = cr, ["render_terrain"] = rr };
+        // render triangles by distance of their centre from the route (cells beyond 120 m: "far")
+        {
+            var bandsT = new SortedDictionary<string, int>();
+            foreach (var t in ren)
+            {
+                double cx = (t.A.X + t.B.X + t.C.X) / 3, cz = (t.A.Z + t.B.Z + t.C.Z) / 3;
+                int i = (int)((cx - StageBuild.PhysMinX) / Cell), j = (int)((cz - StageBuild.PhysMinZ) / Cell);
+                double dd = i < 0 || j < 0 || i >= w || j >= h ? double.MaxValue : dist[j * w + i];
+                string key = dd <= 30 ? "a 0-30" : dd <= 60 ? "b 30-60" : dd <= 120 ? "c 60-120" : "d >120";
+                bandsT[key] = bandsT.GetValueOrDefault(key) + 1;
+            }
+            Console.WriteLine("render triangles by distance from the route: " + string.Join(", ", bandsT.Select(kv => $"{kv.Key[2..]} m {kv.Value}")));
+        }
+        // source winding: per mesh, triangles whose glb winding normal points down while most of the mesh points up
+        // (the visuals builder forces every ground triangle to face up, which turns these away from the camera)
+        foreach (var (label, list) in new[] { ("collision", col), ("render", ren) })
+        {
+            double Ny(Tri t) { var u = t.B - t.A; var v = t.C - t.A; return u.Z * v.X - u.X * v.Z; }
+            var major = list.GroupBy(t => t.Mat).ToDictionary(g => g.Key, g => Math.Sign(g.Sum(t => Math.Sign(Ny(t)))));
+            var down = list.Where(t => Math.Sign(Ny(t)) == -major[t.Mat]).ToList();
+            var bins = new SortedDictionary<int, int>();
+            foreach (var t in down)
+            {
+                double cx = (t.A.X + t.B.X + t.C.X) / 3, cz = (t.A.Z + t.B.Z + t.C.Z) / 3;
+                int i = (int)((cx - StageBuild.PhysMinX) / Cell), j = (int)((cz - StageBuild.PhysMinZ) / Cell);
+                if (i < 0 || j < 0 || i >= w || j >= h || dist[j * w + i] > 60) continue;
+                int bin = (int)(along[near[j * w + i]] / 100);
+                bins[bin] = bins.GetValueOrDefault(bin) + 1;
+            }
+            Console.WriteLine($"{label}: {down.Count} triangles wound against their mesh (facing down); within 60 m of the route by 100 m: " +
+                              string.Join(", ", bins.Select(kv => $"{kv.Key * 100}: {kv.Value}")));
+        }
         // --at "x,z;x,z": plan points in physics metres (= UE X, Y in m): up-facing surface layers in both meshes
         foreach (var pt in (o.Named.GetValueOrDefault("at") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries))
         {

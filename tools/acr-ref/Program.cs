@@ -57,6 +57,7 @@ internal static class Program
                 "tex-mean" => TexScan.Means(opts),
                 "terrain-compare" => TerrainCompare.Run(opts),
                 "legacy-export-diff" => TerrainCompare.ExportDiff(opts),
+                "ground-lod-test" => TerrainCompare.LodTest(opts),
                 _ => Fail($"unknown command '{args[0]}'"),
             };
         }
