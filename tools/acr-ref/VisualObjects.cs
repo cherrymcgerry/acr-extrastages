@@ -80,12 +80,15 @@ internal static class VisualObjects
         bool Fallback(string t, double d) { var f = fallbacks.GetValueOrDefault(t); fallbacks[t] = (f.n + 1, Math.Max(f.depth, d)); return false; }
         var extents = new List<(string template, string id, double ext, double bounds)>();
         var canopyMode = canopies ?? (cfg["objects"].TryGetValue("canopies", out var cm) && cm is string cms ? cms : "clip");
-        if (canopyMode is not ("clip" or "full" or "none")) throw new ArgumentException($"[objects] canopies must be clip, full or none, not {canopyMode}");
+        if (canopyMode is not ("clip" or "apex" or "full" or "none")) throw new ArgumentException($"[objects] canopies must be clip, apex, full or none, not {canopyMode}");
         double canopyClip = cfg.Num("objects", "canopy_clip_height_m") * 100, minFill = cfg.Num("objects", "shape_min_fill");
+        double canopyMaxRadius = canopyMode == "apex" ? cfg.Num("objects", "canopy_max_span_m") * 100 / 2 * 0.98 : double.MaxValue;
         int canopiesClipped = 0, canopiesHidden = 0, shapesCompared = 0;
         double worstOutside = 0, worstFill = 1;
         var shapeMismatches = new List<string>();
         var canopyColliderTops = new List<double>();
+        var canopySpans = new List<(double span, string who)>();
+        var flareSpans = new List<(double span, string who)>();
         static string Dims(Vector3 a, Vector3 b) => $"{(b.X - a.X) / 100:0.0} x {(b.Y - a.Y) / 100:0.0} x {(b.Z - a.Z) / 100:0.0} m";
 
         V3 Ue(Vector3 dr2) => pl.ToUe([dr2.X, dr2.Y, dr2.Z]);
@@ -110,9 +113,9 @@ internal static class VisualObjects
                 int from = target.Pos.Count;
                 bool canopy = IsCanopy(s);
                 if (canopy && canopyMode == "none") { canopiesHidden++; return; }
-                if (canopy && canopyMode == "clip")
+                if (canopy && canopyMode is "clip" or "apex")
                 {
-                    if (!AddClippedCone(target, s, baseZ + canopyClip)) { canopiesHidden++; return; }
+                    if (!AddClippedCone(target, s, baseZ + canopyClip, canopyMode == "apex", canopyMaxRadius)) { canopiesHidden++; return; }
                     canopiesClipped++;
                 }
                 else AddShape(target, s, sides, pl);
@@ -121,13 +124,15 @@ internal static class VisualObjects
                 var lo = new Vector3(float.MaxValue); var hi = new Vector3(float.MinValue);
                 for (int i = from; i < target.Pos.Count; i++) { lo = Vector3.Min(lo, target.Pos[i]); hi = Vector3.Max(hi, target.Pos[i]); }
                 double outBy = Math.Max(Math.Max(Math.Max(cmn.X - lo.X, hi.X - cmx.X), Math.Max(cmn.Y - lo.Y, hi.Y - cmx.Y)), Math.Max(cmn.Z - lo.Z, hi.Z - cmx.Z));
-                double fill = canopy && canopyMode == "clip" ? 1 : Math.Min(Math.Min((hi.X - lo.X) / Math.Max(1, cmx.X - cmn.X), (hi.Y - lo.Y) / Math.Max(1, cmx.Y - cmn.Y)),
+                double fill = canopy && canopyMode is "clip" or "apex" ? 1 : Math.Min(Math.Min((hi.X - lo.X) / Math.Max(1, cmx.X - cmn.X), (hi.Y - lo.Y) / Math.Max(1, cmx.Y - cmn.Y)),
                                                                        (hi.Z - lo.Z) / Math.Max(1, cmx.Z - cmn.Z));
                 shapesCompared++;
                 if (outBy > 2 || fill < minFill)
                     shapeMismatches.Add($"{s.Template} {s.Instance} {s.Kind}: drawn {Dims(lo, hi)} vs collider {Dims(cmn, cmx)} (outside by {outBy:0} cm, fill {fill:0.00})");
                 worstOutside = Math.Max(worstOutside, outBy); worstFill = Math.Min(worstFill, fill);
                 if (canopy) canopyColliderTops.Add(cmx.Z - baseZ);
+                if (canopy && canopyMode is "clip" or "apex") canopySpans.Add((Math.Max(hi.X - lo.X, hi.Y - lo.Y), $"{s.Template} {s.Instance}"));
+                if (!canopy && s.MeshPhysics is { Count: > 1 }) flareSpans.Add((Math.Max(Math.Max(hi.X - lo.X, hi.Y - lo.Y), hi.Z - lo.Z), $"{s.Template} {s.Instance}"));
             }
             if (tree && shapes.Count > 0)
             {
@@ -224,6 +229,20 @@ internal static class VisualObjects
             ["without_render_mesh_or_shapes"] = noMesh,
             ["canopies"] = $"{canopyMode}: {canopiesClipped} drawn up to {canopyClip / 100:0.#} m above the tree base, {canopiesHidden} not drawn"
                            + (canopyColliderTops.Count > 0 ? $"; their colliders (kept, DR2 sizes) reach {canopyColliderTops.Average() / 100:0.0} m above the base on average, {canopyColliderTops.Max() / 100:0.0} m max" : ""),
+            ["canopy_drawn_span"] = canopySpans.Count == 0 ? null : new JsonObject
+            {
+                ["max_m"] = Math.Round(canopySpans.Max(x => x.span) / 100, 2),
+                ["over_1_5_m"] = canopySpans.Count(x => x.span > 150),
+                ["over_3_m"] = canopySpans.Count(x => x.span > 300),
+                ["widest"] = new JsonArray(canopySpans.OrderByDescending(x => x.span).Take(5).Select(x => (JsonNode)$"{x.who}: {x.span / 100:0.0} m").ToArray()),
+            },
+            ["other_cones_drawn_whole"] = new JsonObject
+            {
+                ["count"] = flareSpans.Count,
+                ["max_m"] = flareSpans.Count == 0 ? 0 : Math.Round(flareSpans.Max(x => x.span) / 100, 2),
+                ["over_1_5_m"] = flareSpans.Count(x => x.span > 150),
+                ["widest"] = new JsonArray(flareSpans.OrderByDescending(x => x.span).Take(5).Select(x => (JsonNode)$"{x.who}: {x.span / 100:0.0} m").ToArray()),
+            },
             ["shapes_vs_colliders"] = new JsonObject
             {
                 ["compared"] = shapesCompared, ["mismatches"] = shapeMismatches.Count,
@@ -322,12 +341,27 @@ internal static class VisualObjects
     }
 
     /// Part of an inverted cone below `topZ` (UE cm): apex up to the cut, capped. False if the apex is above the cut.
-    static bool AddClippedCone(ProcMesh.Section s, ObjectColliders.Shape sh, double topZ)
+    /// clip: each ring point above the cut is pulled down the cone to it; ring points already below stay, so a tilted
+    /// cone keeps its low side at full radius (metre-wide panels). apex: the whole cone is scaled toward its apex until
+    /// every ring point is at or below the cut and within maxRadius of the apex in plan (tilted cones stay as narrow as
+    /// upright ones); cones tilted past their
+    /// half angle (a ring point not above the apex) are not drawn.
+    static bool AddClippedCone(ProcMesh.Section s, ObjectColliders.Shape sh, double topZ, bool uniform = false, double maxRadius = double.MaxValue)
     {
         var ue = sh.MeshPhysics!.Select(PhysToUe).ToList();
         var apex = ue[^1];
         if (apex.Z >= topZ) return false;
-        var ring = ue.Take(ue.Count - 1).Select(r => r.Z <= topZ ? r : apex + (r - apex) * ((topZ - apex.Z) / (r.Z - apex.Z))).ToList();
+        List<V3> ring;
+        if (uniform)
+        {
+            var rim = ue.Take(ue.Count - 1).ToList();
+            if (rim.Any(r => r.Z <= apex.Z + 1)) return false;
+            double t = Math.Min(1, rim.Min(r => (topZ - apex.Z) / (r.Z - apex.Z)));
+            double reach = rim.Max(r => Math.Sqrt((r.X - apex.X) * (r.X - apex.X) + (r.Y - apex.Y) * (r.Y - apex.Y)));
+            if (reach * t > maxRadius) t = maxRadius / reach;
+            ring = rim.Select(r => apex + (r - apex) * t).ToList();
+        }
+        else ring = ue.Take(ue.Count - 1).Select(r => r.Z <= topZ ? r : apex + (r - apex) * ((topZ - apex.Z) / (r.Z - apex.Z))).ToList();
         var ctr = apex * 0.25 + ring.Aggregate((a, b) => a + b) * (0.75 / ring.Count);
         for (int i = 0; i < ring.Count; i++)
         {

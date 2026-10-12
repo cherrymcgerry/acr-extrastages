@@ -147,6 +147,21 @@ internal static class StageVerify
             C(ok, $"sky via CUE4Parse: {sky.Name}: {string.Join(", ", got.Select(g => $"{g.f} {g.v}"))}, Time of Day {sky.GetOrDefault<double>("Time of Day"):0.##} (unchanged)");
         }
 
+        if (o.Named.GetValueOrDefault("hidden-actors") == "1")
+        {
+            // v1.9: AActor.bHidden on Hafren's HLOD proxies and terrain/background/tree actors, and the values after it intact
+            var level = p.LoadPackage("acr/Content/Levels/WalesS4HafrenSouth.umap").GetExports().ToList();
+            var hlods = level.Where(x => x.ExportType == "WorldPartitionHLOD").ToList();
+            int hlodHidden = hlods.Count(x => x.GetOrDefault<bool>("bHidden"));
+            int guids = hlods.Count(x => x.TryGetValue(out FStructFallback _, "SourceCellGuid") || x.TryGetValue(out CUE4Parse.UE4.Objects.Core.Misc.FGuid g, "SourceCellGuid") && g != default);
+            int roots = hlods.Count(x => x.GetOrDefault<CUE4Parse.UE4.Objects.UObject.FPackageIndex>("RootComponent")?.ResolvedObject is not null);
+            var terrain = level.Where(x => x.ExportType == "StaticMeshActor" && x.Name.StartsWith("SM_WalesS4HafrenSouthTerrain")).ToList();
+            int terrainHidden = terrain.Count(x => x.GetOrDefault<bool>("bHidden") && x.GetOrDefault<CUE4Parse.UE4.Objects.UObject.FPackageIndex>("StaticMeshComponent")?.ResolvedObject is not null);
+            C(hlods.Count > 0 && hlodHidden == hlods.Count && guids == hlods.Count && roots == hlods.Count && terrain.Count == 4 && terrainHidden == 4,
+              $"hidden host actors via CUE4Parse: {hlodHidden} of {hlods.Count} WorldPartitionHLOD bHidden (SourceCellGuid {guids}, RootComponent {roots} still read); " +
+              $"{terrainHidden} of {terrain.Count} Hafren terrain tiles bHidden with their StaticMeshComponent");
+        }
+
         if (o.Named.GetValueOrDefault("dr2-root") is { } dr2Root && secs is not null)
         {
             // v1.8: the DR2 MICs on the visuals mesh and their textures as the game's reader loads them

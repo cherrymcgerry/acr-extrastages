@@ -630,3 +630,57 @@ Report:
 - screenshots of a straight road, a hairpin, the ground beside the road, a fence or building, and the vista;
 - loading time and frame rate compared with v1.7;
 - anything that broke.
+
+## v1.9 test: orange panels, slope streaks and Hafren's leftover scenery fixed
+
+`work\acr\dist-v1.9\zz_acrdirt_nz01r5_P.*`: v1.8 with three fixes, nothing else changed. The container name is the
+same as before, and `dist-v1.6` to `dist-v1.8` are unchanged. Build: `.\mods\acrdirt-stage\build.ps1 -Version v1.9 -Verify`.
+- Offline: 181 PASS / 0 FAIL. Sizes: ucas 504,605,357 (8 MB more than v1.8, from the duplicated terrain vertices),
+  utoc 98,197, pak 347. Triangles: 1,519,474, the same as v1.8.
+
+What changed from v1.8:
+1. **Orange panels:** these are DR2's tree-canopy colliders. They are cones, wide end up, drawn in the trunk colour.
+   - Since v1.5 they were cut 2.5 m above the tree base, but only the points above the cut were pulled in. A tilted
+     cone kept its low side at full radius, which gives panels several metres wide.
+   - The trunk geometry is identical in v1.5 to v1.8, so this is not a new regression. Inferred: v1.5 still had
+     Hafren's forest around, which hid many of them.
+   - v1.9 shrinks the whole cone toward its tip until it is under the cut and at most      1.5 m wide. The widest is now
+     1.26 m (792 drawn, 11 skipped). The colliders themselves are unchanged.
+2. **Streaks on steep ground:** the 8 m grass texture was projected straight down, so steep faces got long smears
+   (87,000 of 690,000 terrain triangles were stretched more than 2x).
+   - v1.9 projects each triangle from the side it faces most (top, or one of the two horizontal axes) at the same 8 m
+     scale. No triangle is stretched now; the worst UV-to-surface ratio is 0.58 (an ideal 1.0).
+   - Seams where the projection direction changes are expected on slopes.
+3. **Hafren's pines, snowy hills and white shards:** Hafren's distant-view proxy meshes, which UE calls HLODs (87
+   actors of trees and terrain).
+   - v1.6 hid them by switching their components invisible. But the engine shows an HLOD whenever the detailed area
+     it stands in for is not loaded, by switching those same components visible again. Since v1.6 none of Hafren's
+     areas load, so every HLOD came back.
+   - Verified in engine source: the HLOD code sets component visibility. Inferred: this is what the screenshots show.
+   - v1.9 also sets the actor-level hidden flag (`bHidden`), which that code does not touch. It is set on all 87
+     HLODs, Hafren's 4 terrain tiles, the background meshes and the loose spruce/beech actors (100 actors).
+   - The 6 wind turbines and the treeline container keep only the v1.6 hiding. They are about 3 km away by the
+     service park, or are not HLODs.
+
+Not changed, for reference:
+- The **white vehicle** at about 1.47 km is DR2's recovery truck with its own texture.
+- The **dark boxes** there are DR2's parked vehicles, ambulance and scaffolding. They are drawn as their collider
+  boxes because their models are over the 4,000-triangle limit for drawing real meshes.
+
+Check:
+1. **Orange:** only small tips (under about 1.3 m) at tree bases and the trunk prisms; no large floating V shapes or
+   blobs on the grass.
+2. **Slopes:** the cut bank right of the road at about 1.0 km, and the slope at about 1.4 km. Grass should show at an
+   even scale, without long streaks. Note any hard seams.
+3. **Hafren scenery:** no pine forest, no snow-covered hills and no white shards poking through the ground, near the
+   road or in the distance.
+   - The horizon should be DR2's vista (green/brown) against the sky.
+   - If pines or snowy hills remain, note the distance markers and take a screenshot: then they come from somewhere
+     else (for example the streaming areas).
+4. As before: road texture, objects, start, timer, pacenotes, respawn.
+
+Install:
+1. Remove every previous `zz_acrdirt_*` file from `~mods`.
+2. Copy the three files from `work\acr\dist-v1.9` into `~mods`.
+
+Report: screenshots at the same spots as v1.8 (0.5, 1.0 and 1.4 km), and anything that broke.

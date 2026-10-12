@@ -14,8 +14,9 @@ namespace AcrRef;
 ///   layers always loads. Every cell except the kept ones gets only reverse-direction layers (the reverse rally-props
 ///   layer if it had none), so the forward variant never streams it in. The reverse variant still loads all of them.
 /// - persistent actors (HLOD proxies, terrain tiles, background, treelines, turbines): their components get
-///   bVisible = false, written as a zero-valued slot in the unversioned header (no value bytes change). HLOD
-///   visibility is switched at actor level (SetActorHiddenInGame), which does not override a component's bVisible.
+///   bVisible = false, written as a zero-valued slot in the unversioned header (no value bytes change). The HLOD
+///   runtime calls SetVisibility on HLOD components and overrides that, so with actorHidden (v1.9) the actor's
+///   bHidden is also set, which hides all its components in game.
 internal static class Scenery
 {
     public const string PersistentLevel = "acr/Content/Levels/WalesS4HafrenSouth.umap";
@@ -144,7 +145,7 @@ internal static class Scenery
         cfg.Arr("persistent", "hide_actor_classes").Cast<string>().ToHashSet(),
         cfg.Arr("persistent", "hide_meshes").Cast<string>().Select(x => new Regex(x)).ToArray());
 
-    public static JsonObject Build(string legacy, string outRoot, Toml cfg, string usmap)
+    public static JsonObject Build(string legacy, string outRoot, Toml cfg, string usmap, bool actorHidden = false)
     {
         var path = HostPaths.Resolve(legacy, Persistent);
         var raw = (File.ReadAllBytes(path), File.ReadAllBytes(Path.ChangeExtension(path, ".uexp")));
@@ -187,13 +188,21 @@ internal static class Scenery
         var byRule = new SortedDictionary<string, int>();
         var compClasses = new SortedDictionary<string, int>();
         var skipped = new SortedDictionary<string, int>();
-        int actorsHidden = 0, compsHidden = 0, already = 0;
+        int actorsHidden = 0, compsHidden = 0, already = 0, actorFlag = 0;
+        var actorFlagSkipped = new SortedDictionary<string, int>();
         var actorNames = new JsonArray();
         foreach (var (actor, rule, comps) in HiddenActors(pkg, plan))
         {
             actorsHidden++;
             actorNames.Add(pkg.ExportName(actor));
             byRule[rule] = byRule.GetValueOrDefault(rule) + 1;
+            if (!actorHidden) { }
+            else if (WithActorHidden(mappings, pkg.ExportClass(actor), pkg.GetExportData(actor)) is { } hiddenData)
+            {
+                pkg.SetExportData(actor, hiddenData);
+                actorFlag++;
+            }
+            else actorFlagSkipped[pkg.ExportClass(actor)] = actorFlagSkipped.GetValueOrDefault(pkg.ExportClass(actor)) + 1;
             foreach (var c in comps)
             {
                 var ccls = pkg.ExportClass(c);
@@ -224,12 +233,104 @@ internal static class Scenery
             ["actors"] = actorNames,
         };
 
+        if (actorHidden)
+        {
+            report["persistent"]!["actors_bhidden"] = actorFlag;
+            report["persistent"]!["actors_bhidden_skipped"] = new JsonObject(actorFlagSkipped.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)kv.Value)));
+        }
         var dest = Path.Combine(outRoot, Persistent + Path.GetExtension(path));
         pkg.SaveTo(dest);
         foreach (var ext in new[] { ".ubulk", ".uptnl" })
             if (File.Exists(Path.ChangeExtension(path, ext))) File.Copy(Path.ChangeExtension(path, ext), Path.ChangeExtension(dest, ext), true);
         Console.WriteLine($"scenery: {retagged} cells moved to reverse-only layers ({kept} kept), {actorsHidden} persistent actors / {compsHidden} components hidden");
         return report;
+    }
+
+    /// The actor export with AActor.bHidden = true (a non-zero bool: one value byte at its slot's place among the
+    /// values). Null when the class is not in the mappings or a value before it has no fixed size here (BP actors with
+    /// arrays/maps); those keep only their components' bVisible = false.
+    static byte[]? WithActorHidden(CUE4Parse.MappingsProvider.TypeMappings mappings, string cls, byte[] d)
+    {
+        if (SlotOf(mappings, cls, "Actor", "bHidden") is not { } slot) return null;
+        int p = 0;
+        var slots = Unv.ReadHeader(d, ref p);
+        if (slots.Any(s => s.Index == slot && !s.Zero)) return d;
+        int at = p;
+        foreach (var s in slots.Where(s => s.Index < slot && !s.Zero))
+        {
+            if (FixedSize(mappings, cls, s.Index) is not { } n) return null;
+            at += n;
+        }
+        using var ms = new MemoryStream();
+        using var w = new BinaryWriter(ms);
+        Unv.WriteHeader(w, slots.Where(s => s.Index != slot).Append(new Unv.Slot(slot, false)).OrderBy(s => s.Index).ToList());
+        w.Write(d, p, at - p);
+        w.Write((byte)1);
+        w.Write(d, at, d.Length - at);
+        return ms.ToArray();
+    }
+
+    static bool HiddenValue(byte[] d, int slot, CUE4Parse.MappingsProvider.TypeMappings mappings, string cls)
+    {
+        int p = 0;
+        var slots = Unv.ReadHeader(d, ref p);
+        if (!slots.Any(s => s.Index == slot && !s.Zero)) return false;
+        foreach (var s in slots.Where(s => s.Index < slot && !s.Zero))
+        {
+            if (FixedSize(mappings, cls, s.Index) is not { } n) return false;
+            p += n;
+        }
+        return d[p] == 1;
+    }
+
+    static int? FixedSize(CUE4Parse.MappingsProvider.TypeMappings mappings, string cls, int slot)
+    {
+        if (!mappings.Types.TryGetValue(cls, out var s)) return null;
+        for (var cur = s; cur is not null; cur = cur.Super?.Value)
+        {
+            if (slot < cur.PropertyCount)
+            {
+                if (!cur.Properties.TryGetValue(slot, out var p)) return null;
+                var t = p.MappingType;
+                if (p.ArraySize != 1) return null;
+                return t.Type switch
+                {
+                    "BoolProperty" or "ByteProperty" => 1,
+                    "ObjectProperty" or "ClassProperty" or "IntProperty" or "UInt32Property" or "FloatProperty" => 4,
+                    "Int64Property" or "DoubleProperty" or "NameProperty" => 8,
+                    "StructProperty" => t.StructType switch { "Guid" => 16, "Vector" or "Rotator" => 24, _ => null },
+                    _ => null,
+                };
+            }
+            slot -= cur.PropertyCount;
+        }
+        return null;
+    }
+
+    /// Unversioned slot of owner.property on class cls (the class's own properties first, then each super's).
+    static int? SlotOf(CUE4Parse.MappingsProvider.TypeMappings mappings, string cls, string owner, string property)
+    {
+        if (!mappings.Types.TryGetValue(cls, out var s)) return null;
+        int b = 0;
+        for (var cur = s; cur is not null; cur = cur.Super?.Value)
+        {
+            if (cur.Name == owner)
+                foreach (var (i, p) in cur.Properties) if (p.Name == property) return b + i;
+            b += cur.PropertyCount;
+        }
+        return null;
+    }
+
+    static string SlotName(CUE4Parse.MappingsProvider.TypeMappings mappings, string cls, int slot)
+    {
+        if (!mappings.Types.TryGetValue(cls, out var s)) return "?";
+        for (var cur = s; cur is not null; cur = cur.Super?.Value)
+        {
+            if (slot < cur.PropertyCount)
+                return cur.Properties.TryGetValue(slot, out var p) ? $"{cur.Name}.{p.Name}:{p.MappingType.Type}{(p.MappingType.StructType is { } st ? "<" + st + ">" : "")}" : $"{cur.Name}.#{slot}";
+            slot -= cur.PropertyCount;
+        }
+        return "?";
     }
 
     static int? VisibleSlot(CUE4Parse.MappingsProvider.TypeMappings mappings, string cls)
@@ -266,6 +367,27 @@ internal static class Scenery
             if (rule is null && byName?.Contains(pkg.ExportName(a)) == true) rule = "build report";
             if (rule is not null) yield return (a, rule, comps);
         }
+    }
+
+    /// scenery-actor-slots <legacy root> <scenery.toml>: the unversioned slots before AActor.bHidden on every hidden actor.
+    public static int ActorSlots(Options o)
+    {
+        var pkg = new LegacyPackage(HostPaths.Resolve(o.Positional[0], Persistent));
+        var plan = LoadPlan(Toml.Load(o.Positional[1]));
+        var mappings = new FileUsmapTypeMappingsProvider(o.Usmap, StringComparer.OrdinalIgnoreCase).MappingsForGame!;
+        var tally = new SortedDictionary<string, int>();
+        foreach (var (a, rule, _) in HiddenActors(pkg, plan))
+        {
+            int p = 0;
+            var cls = pkg.ExportClass(a);
+            var slots = Unv.ReadHeader(pkg.GetExportData(a), ref p);
+            var hidden = SlotOf(mappings, cls, "Actor", "bHidden");
+            var key = $"{cls} (bHidden slot {hidden?.ToString() ?? "?"}): " + string.Join(", ", slots.Where(s => hidden is null || s.Index <= hidden)
+                .Select(s => $"{s.Index}{(s.Zero ? "z" : "")} {SlotName(mappings, cls, s.Index)}"));
+            tally[key] = tally.GetValueOrDefault(key) + 1;
+        }
+        foreach (var (k, n) in tally) Console.WriteLine($"{n,4} {k}");
+        return 0;
     }
 
     // ---------------- check ----------------
@@ -310,6 +432,21 @@ internal static class Scenery
             }
         }
         C(actors > 0 && hidden == comps, $"scenery: {hidden} of {comps} scene components of {actors} hidden persistent actors have bVisible = false");
+        if (report?["persistent"]?["actors_bhidden"]?.GetValue<int>() is { } flagged && flagged > 0)
+        {
+            // the HLOD runtime switches its actors' components with SceneComponent::SetVisibility, overriding bVisible;
+            // AActor.bHidden is not touched by it and hides every component in game
+            int set = 0, hlods = 0, hlodSet = 0;
+            foreach (var (a, _, _) in HiddenActors(pkg, plan, expected))
+            {
+                var cls = pkg.ExportClass(a);
+                bool on = SlotOf(mappings, cls, "Actor", "bHidden") is { } slot && HiddenValue(pkg.GetExportData(a), slot, mappings, cls);
+                if (on) set++;
+                if (cls == "WorldPartitionHLOD") { hlods++; if (on) hlodSet++; }
+            }
+            C(set == flagged && hlods > 0 && hlodSet == hlods,
+              $"scenery: {set} hidden persistent actors have bHidden = true (build: {flagged}), all {hlods} WorldPartitionHLOD actors among them");
+        }
         if (expected is not null)
             C(found.SetEquals(expected), $"scenery: {found.Count} hidden actors = the {expected.Count} listed in the build report" +
               (found.SetEquals(expected) ? "" : $" (missing {string.Join(", ", expected.Except(found).Take(5))}; extra {string.Join(", ", found.Except(expected).Take(5))})"));

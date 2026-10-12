@@ -20,14 +20,17 @@ internal static class Visuals
     ///   owner:    re-parent the visuals component to this actor (export name prefix, e.g. SplinesActor) and attach it
     ///             to its root, so actor-level hiding of the trigger does not apply either
     ///   vegetation: none (no non-solid geometry) | crowns (small tree crowns, see VisualObjects)
-    ///   canopies: overrides [objects] canopies (clip | full | none)
+    ///   canopies: overrides [objects] canopies (clip | apex | full | none)
     ///   vista: adds DR2's distant vista ring (render/vista.glb, see [vista]) as a last section
     ///   textured: terrain, road and vista get the [textured] materials; the road gets road-following UVs (RoadUv)
     ///   dr2: (v1.8, on top of textured) terrain, road, vista and the render-mesh objects get DR2's own textures
     ///        ([dr2_textures], Dr2Materials); dr2Revert: comma-separated sections (terrain, road, vista, objects) that
     ///        keep their textured (v1.7) material and UVs instead
+    ///   terrainUv: planar (top-down, v1.7/v1.8) | box (v1.9, DR2 terrain only: each triangle projected on the axis plane
+    ///        its normal points along most, at terrain_tile_m; no stretching on steep faces)
     internal sealed record Options(string Host, bool Retarget, string? Owner, string Vegetation = "none", string? Canopies = null,
-                                   bool Vista = false, bool Textured = false, bool Dr2 = false, string Dr2Revert = "")
+                                   bool Vista = false, bool Textured = false, bool Dr2 = false, string Dr2Revert = "",
+                                   string TerrainUv = "planar")
     {
         public static Options From(IReadOnlyDictionary<string, string> named) => new(
             named.GetValueOrDefault("visuals-host", "start"),
@@ -38,7 +41,8 @@ internal static class Visuals
             named.GetValueOrDefault("visuals-vista", "0") != "0",
             named.GetValueOrDefault("visuals-textured", "0") != "0",
             named.GetValueOrDefault("visuals-dr2", "0") != "0",
-            named.GetValueOrDefault("visuals-dr2-revert", ""));
+            named.GetValueOrDefault("visuals-dr2-revert", ""),
+            named.GetValueOrDefault("visuals-terrain-uv", "planar"));
 
         public static readonly string[] Dr2Sections = ["terrain", "road", "vista", "objects"];
 
@@ -174,7 +178,9 @@ internal static class Visuals
         {
             // DR2 detail slice tiled every terrain_tile_m (the v1.7 UVs tile every terrain_uv_m)
             float k = (float)(cfg.Num("textured", "terrain_uv_m") / cfg.Num("dr2_textures", "terrain_tile_m"));
-            for (int i = 0; i < terrain.Uv.Count; i++) terrain.Uv[i] *= k;
+            if (opt.TerrainUv == "box") dr2Rep["terrain_uv"] = BoxUv(terrain, (float)(cfg.Num("dr2_textures", "terrain_tile_m") * 100));
+            else if (opt.TerrainUv == "planar") for (int i = 0; i < terrain.Uv.Count; i++) terrain.Uv[i] *= k;
+            else throw new ArgumentException($"--visuals-terrain-uv must be planar or box, not {opt.TerrainUv}");
             terrainMat = MatPath(dr2!.Mic("terrain", dr2.Texture(cfg.Str("dr2_textures", "terrain"))));
             dr2Rep["terrain"] = $"{cfg.Str("dr2_textures", "terrain")}, tiled every {cfg.Num("dr2_textures", "terrain_tile_m")} m";
         }
@@ -500,9 +506,35 @@ internal static class Visuals
                                          + $" (max outside {sv["max_outside_collider_cm"]} cm, min fill {sv["min_fill"]})" + (bad > 0 ? $": {sv["first"]![0]}" : ""));
                 }
                 if (or["canopies"] is { } cn) C(true, $"visuals: canopies {cn}");
+                if (or["canopy_drawn_span"] is JsonObject cs && or["canopies"]?.GetValue<string>().StartsWith("apex") == true)
+                {
+                    double lim = cfg.Num("objects", "canopy_max_span_m");
+                    C(cs["max_m"]!.GetValue<double>() <= lim,
+                      $"visuals: drawn canopy cones at most {cs["max_m"]} m across (limit {lim} m; widest {cs["widest"]![0]})");
+                }
             }
         }
         else if (probe is not null) C(false, "visuals road corridor: section names missing from the report");
+        if (opt.Dr2On("terrain"))
+        {
+            // UV area (in texture repeats x repeat size) over true area per triangle: 1 = no stretch; top-down planar UVs
+            // tend to 0 on steep faces (long streaks), box projection keeps at least 1/sqrt(3)
+            var tr = secs[1];
+            double rep = cfg.Num("dr2_textures", "terrain_tile_m") * 100, minRatio = double.MaxValue;
+            int steep = 0, nTri = 0;
+            for (int t = 0; t + 2 < tr.Idx.Count; t += 3)
+            {
+                var (a, b, c3) = ((int)tr.Idx[t], (int)tr.Idx[t + 1], (int)tr.Idx[t + 2]);
+                double area = Vector3.Cross(tr.Pos[b] - tr.Pos[a], tr.Pos[c3] - tr.Pos[a]).Length();
+                if (area < 1) continue;
+                var du = tr.Uv[b] - tr.Uv[a]; var dv = tr.Uv[c3] - tr.Uv[a];
+                double ratio = Math.Abs(du.X * dv.Y - du.Y * dv.X) * rep * rep / area;
+                nTri++; minRatio = Math.Min(minRatio, ratio); if (ratio < 0.5) steep++;
+            }
+            if (opt.TerrainUv == "box")
+                C(steep == 0 && minRatio >= 0.57, $"visuals: terrain box UVs: UV / true area at least {minRatio:0.000} on all {nTri} triangles (1/sqrt 3 = 0.577; none stretched)");
+            else w.WriteLine($"     visuals: terrain planar UVs: {steep} of {nTri} triangles stretched more than 2x (UV / true area < 0.5), worst {minRatio:0.000}");
+        }
         if (opt.Dr2On("road"))
         {
             var road = secs[2];
@@ -563,6 +595,37 @@ internal static class Visuals
 
     /// DR2's distant vista ring in world space. Triangles over a [vista] exclude_cell_m grid cell that the drawn ground
     /// touches are dropped: the ring also runs under the playable area, where it would show through the ground.
+    /// Box projection in place: each triangle takes UV0 from the axis plane its face normal points along most (UE
+    /// X/Y/Z), one texture repeat every `repeatCm`; vertices are duplicated where triangles on different planes meet
+    /// (normals kept smooth).
+    static string BoxUv(ProcMesh.Section s, float repeatCm)
+    {
+        var pos = s.Pos.ToList(); var nrm = s.Nrm.ToList(); var idx = s.Idx.ToList();
+        s.Pos.Clear(); s.Nrm.Clear(); s.Uv.Clear(); s.Idx.Clear(); s.Tan.Clear();
+        var map = new Dictionary<(uint v, int axis), uint>();
+        var perAxis = new int[3];
+        for (int t = 0; t + 2 < idx.Count; t += 3)
+        {
+            var n = Vector3.Cross(pos[(int)idx[t + 1]] - pos[(int)idx[t]], pos[(int)idx[t + 2]] - pos[(int)idx[t]]);
+            var a = Vector3.Abs(n);
+            int axis = a.Z >= a.X && a.Z >= a.Y ? 2 : a.X >= a.Y ? 0 : 1;
+            perAxis[axis]++;
+            for (int k = 0; k < 3; k++)
+            {
+                uint v = idx[t + k];
+                if (!map.TryGetValue((v, axis), out var nv))
+                {
+                    var p = pos[(int)v];
+                    map[(v, axis)] = nv = (uint)s.Pos.Count;
+                    s.Pos.Add(p); s.Nrm.Add(nrm[(int)v]);
+                    s.Uv.Add(axis switch { 2 => new Vector2(p.X, p.Y), 0 => new Vector2(p.Y, p.Z), _ => new Vector2(p.X, p.Z) } / repeatCm);
+                }
+                s.Idx.Add(nv);
+            }
+        }
+        return $"box: {perAxis[2]} triangles on the plan plane, {perAxis[0]} on X, {perAxis[1]} on Y; {pos.Count} -> {s.Pos.Count} vertices, repeat {repeatCm / 100} m";
+    }
+
     /// colourMapUv: UV1 = the DR2 glb plan position over the vista's plan bounds (0..1; how DR2's large vista colour map
     /// lies, see acr-ref vista-map).
     static (ProcMesh.Section, JsonObject) BuildVista(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ProcMesh.Section terrain, ProcMesh.Section road,
