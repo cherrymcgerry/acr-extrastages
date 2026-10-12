@@ -684,3 +684,51 @@ Install:
 2. Copy the three files from `work\acr\dist-v1.9` into `~mods`.
 
 Report: screenshots at the same spots as v1.8 (0.5, 1.0 and 1.4 km), and anything that broke.
+
+## v1.10 test: ground drawn from DR2's render terrain (no sky holes, no floating sheets)
+
+`work\acr\dist-v1.10\zz_acrdirt_nz01r5_P.*`: v1.9 with one change, nothing else. Build:
+`.\mods\acrdirt-stage\build.ps1 -Version v1.10 -Verify`. Offline: 189 PASS / 0 FAIL. Sizes: ucas 578,496,455, utoc
+111,721, pak 347.
+
+Cause (verified offline, `acr-ref terrain-compare`):
+- Up to v1.9 the visible ground was DR2's *collision* ground. That mesh is only a ribbon along the road.
+  - Within 30 m of the centreline, 16% of the ground has no collision triangle; within 60 m, 43%; within 120 m, 69%.
+  - Its ragged outer edge is what showed as sky holes beside the road and on hillsides.
+  - On slopes, the edge of the ribbon seen against the sky looked like sheets hanging in the air.
+  - In v1.8 Hafren's snowy terrain showed through the same gaps (the "white shards").
+- DR2's render terrain (`render/terrain.glb`, 1.30 M triangles) covers all but 171 m² within 60 m of the centreline.
+- On the road the two meshes have the same heights: within 3 m of the centreline they differ by 0.000 m at the 99th
+  percentile.
+
+What changed:
+- The terrain section is DR2's render terrain: 1,083,302 triangles, with the same DR2 grass texture and box
+  projection as v1.9.
+- 218,980 render triangles that lie entirely over the collision road are dropped. The road section is unchanged
+  (same road UVs) but raised 2 cm, so it doesn't flicker against the render terrain where they meet.
+- Collision ground is drawn only where the render terrain has none (27 triangles).
+- Settings: `[ground]` in `config/visuals.toml`.
+- Physics is byte-identical to v1.9: of 97 package files, only the gameplay cell differs, and in it only the visuals
+  mesh export (1 of 1,759).
+- Total: 1,911,701 triangles (v1.9: 1,519,474; budget 3 M).
+
+Offline alignment, drawn ground vs the collision ground the car drives on, compared at the same points every 1 m:
+- 0–5 m from the centreline: median 2.0 cm (the road raise), 99th percentile 3.6 cm.
+- 5–15 m: median 2.0 cm, 99th percentile 16.9 cm.
+  - 0.1% of points differ by more than 30 cm, at bank tops 3–8 m out, in both directions. There DR2's two meshes
+    differ from each other.
+- Sampling every 2 m within 60 m of the route: 2 of 142,196 points have no ground under them. Both have ground 10 cm
+  away on all sides, so they are hairline seams, not holes.
+
+Check:
+1. **Holes:** no blue sky patches in the hillsides or beside the road, for example at 0.3 km and 1.2 km.
+2. **Sheets:** no grass sheets floating over the slopes. The hills should look solid out to the vista.
+3. **Car height:** the car sits on the road surface. It should not float or sink at the road edges, including on
+   cut banks.
+4. **Road edges:** no flicker where the gravel meets the grass, including far ahead.
+5. **Frame rate:** about 26% more triangles than v1.9. Note the frame rate if it dropped.
+6. As before: road texture, objects, cones, no Hafren scenery, start, timer, pacenotes, respawn.
+
+Install:
+1. Remove every previous `zz_acrdirt_*` file from `~mods`.
+2. Copy the three files from `work\acr\dist-v1.10` into `~mods`.

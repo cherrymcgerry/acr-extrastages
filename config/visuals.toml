@@ -70,6 +70,15 @@ exclude_cell_m = 100            # vista triangles over a grid cell touched by th
 min_distance_m = 50             # offline check: nearest vista vertex to the DR2 centreline (plan; DR2's own ring
                                 #   comes to ~83 m on nz01r5)
 
+[ground]
+# only with stage-build --visuals-ground render (build.ps1 v1.10): the terrain section is DR2's render terrain
+# (render/terrain.glb) instead of its collision ground, which covers only a ribbon along the road (acr-ref
+# terrain-compare: 43% of the ground within 60 m of the nz01r5 centreline has no collision triangle)
+road_mask_cm = 50               # render triangles with vertices, edge midpoints and centre over collision road cells are dropped
+fill_cell_cm = 100              # collision ground triangles whose centre is over no render terrain are drawn as a fill
+road_lift_cm = 2                # road section raised against z-fighting where the coplanar render terrain meets it
+hole_check_m = 60               # offline check: plan samples every 2 m within this of the centreline over drawn ground
+
 [textured]
 # only with stage-build --visuals-textured 1 (build.ps1 v1.7+): Hafren's own lit materials on the ground sections
 # (the v1.3 tex-proof showed both render on the visuals mesh with the right look). Objects keep their flat colours.

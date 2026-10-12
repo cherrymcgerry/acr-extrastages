@@ -55,6 +55,8 @@ internal static class Program
                 "dds-preview" => DropIn.Preview(opts),
                 "vista-map" => DropIn.VistaMap(opts),
                 "tex-mean" => TexScan.Means(opts),
+                "terrain-compare" => TerrainCompare.Run(opts),
+                "legacy-export-diff" => TerrainCompare.ExportDiff(opts),
                 _ => Fail($"unknown command '{args[0]}'"),
             };
         }

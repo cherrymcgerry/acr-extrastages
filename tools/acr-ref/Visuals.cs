@@ -28,9 +28,13 @@ internal static class Visuals
     ///        keep their textured (v1.7) material and UVs instead
     ///   terrainUv: planar (top-down, v1.7/v1.8) | box (v1.9, DR2 terrain only: each triangle projected on the axis plane
     ///        its normal points along most, at terrain_tile_m; no stretching on steep faces)
+    ///   ground: collision (v1.1-v1.9: the terrain section is DR2's collision ground, a ribbon along the road with ragged
+    ///        edges) | render (v1.10: DR2's render terrain, render/terrain.glb, minus its triangles under the collision
+    ///        road; collision ground only where the render terrain has none; the road section raised by [ground]
+    ///        road_lift_cm against z-fighting with the coplanar render terrain at its edges)
     internal sealed record Options(string Host, bool Retarget, string? Owner, string Vegetation = "none", string? Canopies = null,
                                    bool Vista = false, bool Textured = false, bool Dr2 = false, string Dr2Revert = "",
-                                   string TerrainUv = "planar")
+                                   string TerrainUv = "planar", string Ground = "collision")
     {
         public static Options From(IReadOnlyDictionary<string, string> named) => new(
             named.GetValueOrDefault("visuals-host", "start"),
@@ -42,7 +46,8 @@ internal static class Visuals
             named.GetValueOrDefault("visuals-textured", "0") != "0",
             named.GetValueOrDefault("visuals-dr2", "0") != "0",
             named.GetValueOrDefault("visuals-dr2-revert", ""),
-            named.GetValueOrDefault("visuals-terrain-uv", "planar"));
+            named.GetValueOrDefault("visuals-terrain-uv", "planar"),
+            named.GetValueOrDefault("visuals-ground", "collision"));
 
         public static readonly string[] Dr2Sections = ["terrain", "road", "vista", "objects"];
 
@@ -113,6 +118,8 @@ internal static class Visuals
                 AddTri(target, Add(a0), Add(b0), Add(c0));
             }
         }
+        if (opt.Ground == "render") (terrain, r["ground"]) = RenderGround(ir, pl, cfg, terrain, road);
+        else if (opt.Ground != "collision") throw new ArgumentException($"--visuals-ground must be collision or render, not {opt.Ground}");
         foreach (var s in new[] { terrain, road }) for (int i = 0; i < s.Nrm.Count; i++) s.Nrm[i] = s.Nrm[i] == Vector3.Zero ? Vector3.UnitZ : Vector3.Normalize(s.Nrm[i]);
 
         // edge posts every spacing_m along the DR2 gates, both sides; start/finish gates
@@ -590,11 +597,266 @@ internal static class Visuals
         var cl = ir.Centre.Select(pl.ToUe).ToList();
         C(cl.All(q => q.X >= mn.X && q.X <= mx.X && q.Y >= mn.Y && q.Y <= mx.Y) && secs[2].Idx.Count > 0,
           $"visuals: ground mesh {ground.Count} vertices covers all {cl.Count} centreline points; road section {secs[2].Idx.Count / 3} triangles");
+        if (opt.Ground == "render") failures += CheckRenderGround(ir, pl, cfg, secs[1], secs[2], C);
         return failures;
     }
 
     /// DR2's distant vista ring in world space. Triangles over a [vista] exclude_cell_m grid cell that the drawn ground
     /// touches are dropped: the ring also runs under the playable area, where it would show through the ground.
+    /// Plan grid over the host physics bounds (UE cm): marks the cells whose centre lies inside a triangle's plan projection.
+    sealed class PlanMask(double cellCm)
+    {
+        readonly double _x0 = StageBuild.PhysMinX * 100, _y0 = StageBuild.PhysMinZ * 100;
+        readonly int _w = (int)Math.Ceiling((StageBuild.PhysMaxX - StageBuild.PhysMinX) * 100 / cellCm),
+                     _h = (int)Math.Ceiling((StageBuild.PhysMaxZ - StageBuild.PhysMinZ) * 100 / cellCm);
+        bool[]? _on;
+        bool[] On => _on ??= new bool[_w * _h];
+
+        public void Add(Vector3 a, Vector3 b, Vector3 c)
+        {
+            double d = (b.X - a.X) * (c.Y - a.Y) - (c.X - a.X) * (b.Y - a.Y);
+            if (Math.Abs(d) < 1e-6) return;
+            int i0 = Math.Max(0, (int)Math.Ceiling((Math.Min(a.X, Math.Min(b.X, c.X)) - _x0) / cellCm - 0.5));
+            int i1 = Math.Min(_w - 1, (int)Math.Floor((Math.Max(a.X, Math.Max(b.X, c.X)) - _x0) / cellCm - 0.5));
+            int j0 = Math.Max(0, (int)Math.Ceiling((Math.Min(a.Y, Math.Min(b.Y, c.Y)) - _y0) / cellCm - 0.5));
+            int j1 = Math.Min(_h - 1, (int)Math.Floor((Math.Max(a.Y, Math.Max(b.Y, c.Y)) - _y0) / cellCm - 0.5));
+            for (int j = j0; j <= j1; j++)
+                for (int i = i0; i <= i1; i++)
+                {
+                    double px = _x0 + (i + 0.5) * cellCm, py = _y0 + (j + 0.5) * cellCm;
+                    double l1 = ((px - a.X) * (c.Y - a.Y) - (c.X - a.X) * (py - a.Y)) / d, l2 = ((b.X - a.X) * (py - a.Y) - (px - a.X) * (b.Y - a.Y)) / d;
+                    if (l1 >= -1e-9 && l2 >= -1e-9 && l1 + l2 <= 1 + 1e-9) On[j * _w + i] = true;
+                }
+        }
+
+        public bool this[Vector3 p]
+        {
+            get
+            {
+                int i = (int)Math.Floor((p.X - _x0) / cellCm), j = (int)Math.Floor((p.Y - _y0) / cellCm);
+                return i >= 0 && j >= 0 && i < _w && j < _h && On[j * _w + i];
+            }
+        }
+    }
+
+    /// Highest up-facing (|n_z| >= 0.3) triangle under a plan point, UE cm, bucketed on a 4 m grid.
+    sealed class TopSurface
+    {
+        const float Cell = 400;
+        readonly Dictionary<(int, int), List<(Vector3 a, Vector3 b, Vector3 c)>> _cells = new();
+
+        public void Add(Vector3 a, Vector3 b, Vector3 c)
+        {
+            var n = Vector3.Cross(b - a, c - a);
+            if (n.Length() == 0 || Math.Abs(n.Z) / n.Length() < 0.3) return;
+            for (int x = (int)MathF.Floor(MathF.Min(a.X, MathF.Min(b.X, c.X)) / Cell); x <= (int)MathF.Floor(MathF.Max(a.X, MathF.Max(b.X, c.X)) / Cell); x++)
+                for (int y = (int)MathF.Floor(MathF.Min(a.Y, MathF.Min(b.Y, c.Y)) / Cell); y <= (int)MathF.Floor(MathF.Max(a.Y, MathF.Max(b.Y, c.Y)) / Cell); y++)
+                {
+                    if (!_cells.TryGetValue((x, y), out var l)) _cells[(x, y)] = l = new();
+                    l.Add((a, b, c));
+                }
+        }
+
+        public double? At(Vector2 p)
+        {
+            if (!_cells.TryGetValue(((int)MathF.Floor(p.X / Cell), (int)MathF.Floor(p.Y / Cell)), out var l)) return null;
+            double? best = null;
+            foreach (var (a, b, c) in l)
+            {
+                double d = (b.X - a.X) * (c.Y - a.Y) - (c.X - a.X) * (b.Y - a.Y);
+                if (Math.Abs(d) < 1e-6) continue;
+                double l1 = ((p.X - a.X) * (c.Y - a.Y) - (c.X - a.X) * (p.Y - a.Y)) / d, l2 = ((b.X - a.X) * (p.Y - a.Y) - (p.X - a.X) * (b.Y - a.Y)) / d;
+                if (l1 < -1e-9 || l2 < -1e-9 || l1 + l2 > 1 + 1e-9) continue;
+                double z = a.Z + l1 * (b.Z - a.Z) + l2 * (c.Z - a.Z);
+                if (best is null || z > best) best = z;
+            }
+            return best;
+        }
+    }
+
+    /// v1.10: the drawn ground against the collision ground the car drives on. Road vertices sit road_lift_cm above it;
+    /// drawn terrain vertices near the centreline match its height (the two DR2 meshes are triangulated differently, so
+    /// small differences between their vertices are expected); the drawn ground has no holes near the route.
+    /// Returns 0: failures are counted by C.
+    static int CheckRenderGround(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ProcMesh.Section terrain, ProcMesh.Section road, Action<bool, string> C)
+    {
+        var sg = new SurfaceGrid(Path.Combine(ir.Dir, "collision.glb"), pl);
+        double lift = cfg.Num("ground", "road_lift_cm");
+        var rd = road.Pos.Select(v => sg.HeightAt(v.X / 100, v.Y / 100) is { } h ? v.Z - h * 100 : double.NaN).Where(d => !double.IsNaN(d)).ToList();
+        int off = rd.Count(d => Math.Abs(d - lift) > 0.5);
+        C(rd.Count > road.Pos.Count * 0.99 && off <= rd.Count / 1000,
+          $"visuals ground: road vertices {lift} cm above the collision ground ({rd.Count} of {road.Pos.Count} over it; {off} off by more than 0.5 cm, " +
+          $"e.g. a higher layer such as a bridge)");
+
+        var cl = ir.Centre.Select(pl.ToUe).Select(q => new Vector2((float)q.X, (float)q.Y)).ToList();
+        const float Bucket = 2000;
+        var buckets = cl.GroupBy(q => ((int)Math.Floor(q.X / Bucket), (int)Math.Floor(q.Y / Bucket))).ToDictionary(g => g.Key, g => g.ToArray());
+        double Dist(Vector2 p)
+        {
+            int bx = (int)Math.Floor(p.X / Bucket), by = (int)Math.Floor(p.Y / Bucket);
+            double best = double.MaxValue;
+            for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++)
+                    if (buckets.TryGetValue((bx + i, by + j), out var qs)) foreach (var q in qs) best = Math.Min(best, (p - q).LengthSquared());
+            return Math.Sqrt(best) / 100;
+        }
+
+        // surface heights at the same plan points (every 1 m within 15 m of the centreline), up-facing triangles only:
+        // on steep banks a vertex-to-surface comparison mostly measures the two triangulations' plan offsets
+        var drawn = new TopSurface(); var collision = new TopSurface();
+        foreach (var s in new[] { terrain, road })
+            for (int t = 0; t + 2 < s.Idx.Count; t += 3) drawn.Add(s.Pos[(int)s.Idx[t]], s.Pos[(int)s.Idx[t + 1]], s.Pos[(int)s.Idx[t + 2]]);
+        foreach (var prim in new Glb(Path.Combine(ir.Dir, "collision.glb")).Primitives())
+        {
+            var ue = new Vector3[prim.Positions.Length / 3];
+            for (int v = 0; v < ue.Length; v++)
+            {
+                var q = pl.ToPhysics(prim.Positions[v * 3], prim.Positions[v * 3 + 1], prim.Positions[v * 3 + 2]);
+                ue[v] = new((float)(q.X * 100), (float)(q.Z * 100), (float)(q.Y * 100));
+            }
+            for (int t = 0; t + 2 < prim.Indices.Length; t += 3) collision.Add(ue[prim.Indices[t]], ue[prim.Indices[t + 1]], ue[prim.Indices[t + 2]]);
+        }
+        // 5-15 m: verges and bank tops, where DR2's two meshes themselves differ (terrain-compare before placement:
+        // p99 0.09 m at 3-10 m, 0.21 m at 10-30 m)
+        (double lo, double hi, double p99Max, List<double> d)[] bands = [(0.0, 5.0, 0.05, new()), (5.0, 15.0, 0.25, new())];
+        var worst = new List<(double diff, Vector2 p, double hd, double hc, double dist)>();
+        var seen1 = new HashSet<(int, int)>();
+        foreach (var q in cl)
+            for (int dx = -1500; dx <= 1500; dx += 100)
+                for (int dy = -1500; dy <= 1500; dy += 100)
+                {
+                    var p = q + new Vector2(dx, dy);
+                    if (!seen1.Add(((int)Math.Floor(p.X / 100), (int)Math.Floor(p.Y / 100)))) continue;
+                    double dist = Dist(p);
+                    var band = bands.FirstOrDefault(b => dist >= b.lo && dist < b.hi);
+                    if (band.d is null || drawn.At(p) is not { } hd || collision.At(p) is not { } hc) continue;
+                    band.d.Add(Math.Abs(hd - hc) / 100);
+                    if (Math.Abs(hd - hc) > 30) worst.Add((Math.Abs(hd - hc) / 100, p, hd / 100, hc / 100, dist));
+                }
+        var along = new double[cl.Count];
+        for (int i = 1; i < cl.Count; i++) along[i] = along[i - 1] + (cl[i] - cl[i - 1]).Length() / 100;
+        string Where(Vector2 p) { int k = Enumerable.Range(0, cl.Count).MinBy(i => (cl[i] - p).LengthSquared()); return $"{along[k]:0} m along"; }
+        foreach (var x in worst.OrderByDescending(x => x.diff).Take(5))
+            Console.WriteLine($"  ground height outlier: {Where(x.p)}, {x.dist:0.0} m off, drawn {x.hd:0.00} m vs collision {x.hc:0.00} m ({(x.hd > x.hc ? "drawn above" : "drawn below")})");
+        Console.WriteLine($"  ground height outliers over 30 cm: {worst.Count(x => x.hd > x.hc)} drawn above, {worst.Count(x => x.hd < x.hc)} drawn below; by 100 m along: " +
+                          string.Join(", ", worst.GroupBy(x => (int)(double.Parse(Where(x.p).Split(' ')[0]) / 100)).OrderBy(g => g.Key).Select(g => $"{g.Key * 100}: {g.Count()}")));
+        foreach (var (lo, hi, p99Max, d) in bands)
+        {
+            d.Sort();
+            double p99 = d.Count == 0 ? 0 : d[(int)(0.99 * (d.Count - 1))], mx = d.Count == 0 ? 0 : d[^1];
+            int over = d.Count(x => x > 0.3);
+            C(d.Count > 0 && p99 <= p99Max && over <= d.Count / 200,
+              $"visuals ground: drawn ground vs collision ground top height {lo:0}-{hi:0} m from the centreline: {d.Count} plan points, " +
+              $"|difference| median {(d.Count > 0 ? d[d.Count / 2] * 100 : 0):0.0} cm, p99 {p99 * 100:0.0} cm (limit {p99Max * 100:0} cm), " +
+              $"over 30 cm {over} (limit 0.5%), max {mx:0.00} m");
+        }
+
+        var covered = new PlanMask(100);
+        foreach (var s in new[] { terrain, road })
+            for (int t = 0; t + 2 < s.Idx.Count; t += 3) covered.Add(s.Pos[(int)s.Idx[t]], s.Pos[(int)s.Idx[t + 1]], s.Pos[(int)s.Idx[t + 2]]);
+        double reach = cfg.Num("ground", "hole_check_m") * 100;
+        var seen = new HashSet<(int, int)>(); int samples = 0, holes = 0; var first = new List<string>();
+        for (int k = 0; k < cl.Count; k++)
+            for (double dx = -reach; dx <= reach; dx += 200)
+                for (double dy = -reach; dy <= reach; dy += 200)
+                {
+                    var p = cl[k] + new Vector2((float)dx, (float)dy);
+                    if (dx * dx + dy * dy > reach * reach || !seen.Add(((int)Math.Floor(p.X / 200), (int)Math.Floor(p.Y / 200)))) continue;
+                    if (p.X < StageBuild.PhysMinX * 100 || p.X > StageBuild.PhysMaxX * 100 || p.Y < StageBuild.PhysMinZ * 100 || p.Y > StageBuild.PhysMaxZ * 100) continue;
+                    samples++;
+                    if (covered[new Vector3(p, 0)]) continue;
+                    holes++;
+                    // drawn ground 10 cm around it: a seam between triangles rather than an opening
+                    int around = new[] { new Vector2(10, 0), new Vector2(-10, 0), new Vector2(0, 10), new Vector2(0, -10) }.Count(o => drawn.At(p + o) is not null);
+                    if (first.Count < 5) first.Add($"({p.X / 100:0},{p.Y / 100:0}) {Dist(p):0} m off, drawn ground at {around} of 4 points 10 cm around");
+                }
+        C(holes <= samples / 1000,
+          $"visuals ground: {samples} plan samples every 2 m within {reach / 100:0} m of the centreline (inside the physics bounds): {holes} over no drawn ground" +
+          (holes > 0 ? $" ({string.Join(", ", first)})" : ""));
+        return 0;
+    }
+
+    /// v1.10 ground: DR2's render terrain (render/terrain.glb) inside the physics bounds instead of the collision ground,
+    /// which only covers a ribbon along the road. Render triangles whose vertices, edge midpoints and centre all lie over the collision
+    /// road (cells of [ground] road_mask_cm) are dropped, the road section stays (RoadUv) and is raised by road_lift_cm:
+    /// both meshes share heights over the road. Collision ground triangles over no render terrain are kept as a fill.
+    static (ProcMesh.Section, JsonObject) RenderGround(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ProcMesh.Section collisionTerrain, ProcMesh.Section road)
+    {
+        var roadMask = new PlanMask(cfg.Num("ground", "road_mask_cm"));
+        for (int t = 0; t + 2 < road.Idx.Count; t += 3) roadMask.Add(road.Pos[(int)road.Idx[t]], road.Pos[(int)road.Idx[t + 1]], road.Pos[(int)road.Idx[t + 2]]);
+        var covered = new PlanMask(cfg.Num("ground", "fill_cell_cm"));
+
+        var terrain = new ProcMesh.Section();
+        int source = 0, cropped = 0, underRoad = 0;
+        var perMat = new Dictionary<string, int>();
+        foreach (var prim in new Glb(Path.Combine(ir.Dir, "render", "terrain.glb")).Primitives())
+        {
+            int nv = prim.Positions.Length / 3;
+            var ue = new Vector3[nv];
+            for (int v = 0; v < nv; v++)
+            {
+                var p = pl.ToPhysics(prim.Positions[v * 3], prim.Positions[v * 3 + 1], prim.Positions[v * 3 + 2]);
+                ue[v] = new((float)(p.X * 100), (float)(p.Z * 100), (float)(p.Y * 100));
+            }
+            var map = new int[nv]; Array.Fill(map, -1);
+            int Add(uint v)
+            {
+                if (map[v] >= 0) return map[v];
+                map[v] = terrain.Pos.Count;
+                terrain.Pos.Add(ue[v]); terrain.Nrm.Add(Vector3.Zero); terrain.Uv.Add(new Vector2(ue[v].X / 400, ue[v].Y / 400));
+                return map[v];
+            }
+            for (int t = 0; t + 2 < prim.Indices.Length; t += 3)
+            {
+                source++;
+                uint a = prim.Indices[t], b = prim.Indices[t + 1], c = prim.Indices[t + 2];
+                var g = (ue[a] + ue[b] + ue[c]) / 3;
+                if (g.X < StageBuild.PhysMinX * 100 || g.X > StageBuild.PhysMaxX * 100 || g.Y < StageBuild.PhysMinZ * 100 || g.Y > StageBuild.PhysMaxZ * 100) { cropped++; continue; }
+                covered.Add(ue[a], ue[b], ue[c]);
+                if (new[] { ue[a], ue[b], ue[c], g, (ue[a] + ue[b]) / 2, (ue[b] + ue[c]) / 2, (ue[c] + ue[a]) / 2 }.All(q => roadMask[q])) { underRoad++; continue; }
+                AddTri(terrain, Add(a), Add(b), Add(c));
+                var key = prim.Material.Split('!')[0];
+                perMat[key] = perMat.GetValueOrDefault(key) + 1;
+            }
+        }
+
+        int fill = 0, collisionTris = collisionTerrain.Idx.Count / 3;
+        var fmap = new Dictionary<uint, int>();
+        int FAdd(uint v)
+        {
+            if (fmap.TryGetValue(v, out var k)) return k;
+            fmap[v] = k = terrain.Pos.Count;
+            var p = collisionTerrain.Pos[(int)v];
+            terrain.Pos.Add(p); terrain.Nrm.Add(Vector3.Zero); terrain.Uv.Add(new Vector2(p.X / 400, p.Y / 400));
+            return k;
+        }
+        for (int t = 0; t + 2 < collisionTerrain.Idx.Count; t += 3)
+        {
+            uint a = collisionTerrain.Idx[t], b = collisionTerrain.Idx[t + 1], c = collisionTerrain.Idx[t + 2];
+            var g = (collisionTerrain.Pos[(int)a] + collisionTerrain.Pos[(int)b] + collisionTerrain.Pos[(int)c]) / 3;
+            if (covered[g]) continue;
+            fill++;
+            AddTri(terrain, FAdd(a), FAdd(b), FAdd(c));
+        }
+
+        float lift = (float)cfg.Num("ground", "road_lift_cm");
+        for (int i = 0; i < road.Pos.Count; i++) road.Pos[i] += new Vector3(0, 0, lift);
+
+        var r = new JsonObject
+        {
+            ["source"] = "render/terrain.glb",
+            ["render_triangles"] = source,
+            ["outside_physics_bounds"] = cropped,
+            ["under_collision_road_dropped"] = underRoad,
+            ["render_triangles_drawn"] = new JsonObject(perMat.OrderBy(kv => kv.Key).Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)kv.Value))),
+            ["collision_fill_triangles"] = fill,
+            ["collision_terrain_triangles_not_drawn"] = collisionTris - fill,
+            ["road_lift_cm"] = lift,
+        };
+        Console.WriteLine($"visuals: render ground {source - cropped - underRoad} of {source} terrain.glb triangles ({cropped} outside the physics bounds, " +
+                          $"{underRoad} under the collision road), {fill} collision fill triangles, road raised {lift} cm");
+        return (terrain, r);
+    }
+
     /// Box projection in place: each triangle takes UV0 from the axis plane its face normal points along most (UE
     /// X/Y/Z), one texture repeat every `repeatCm`; vertices are duplicated where triangles on different planes meet
     /// (normals kept smooth).

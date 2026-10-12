@@ -51,9 +51,14 @@ internal sealed class SurfaceGrid
     }
 
     /// Surface code of the highest triangle under (x, z) physics metres, or null.
-    public string? At(double x, double z)
+    public string? At(double x, double z) => Top(x, z).mat;
+
+    /// Height (physics metres) of the highest triangle under (x, z), or null.
+    public double? HeightAt(double x, double z) => Top(x, z) is { mat: not null } t ? t.y : null;
+
+    (string? mat, double y) Top(double x, double z)
     {
-        if (!_cells.TryGetValue(((int)Math.Floor(x / Cell), (int)Math.Floor(z / Cell)), out var l)) return null;
+        if (!_cells.TryGetValue(((int)Math.Floor(x / Cell), (int)Math.Floor(z / Cell)), out var l)) return (null, 0);
         float best = float.MinValue; int mat = -1;
         foreach (var id in l)
         {
@@ -67,7 +72,7 @@ internal sealed class SurfaceGrid
             float y = l1 * a.Y + l2 * b.Y + l3 * c.Y;
             if (y > best) { best = y; mat = m; }
         }
-        return mat < 0 ? null : Materials[mat];
+        return mat < 0 ? (null, 0) : (Materials[mat], best);
     }
 }
 
