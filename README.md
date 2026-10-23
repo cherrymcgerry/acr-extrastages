@@ -12,6 +12,12 @@ height profiles.
 > **Offline / single-player only.** The generated stages are for offline play. Do not use them
 > in online, leaderboard or competitive modes (see [Disclaimer](#disclaimer)).
 
+![Rally selection: Argentina, Australia, Finland and Germany, each with its own flag, tile and description](docs/media/rally-selection.jpg)
+
+![Stage select for Finland: route maps, the stage map and the height profile](docs/media/stage-select.jpg)
+
+![In game on Jyrkysjärvi, Finland, with a distance call](docs/media/in-game.jpg)
+
 ## Features
 
 - 30 extra stages across 13 locations: Argentina, Australia, Finland, Monte Carlo, Germany,
