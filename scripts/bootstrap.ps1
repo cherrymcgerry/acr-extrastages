@@ -32,9 +32,9 @@ foreach ($repo in $repos) {
     # Idempotent: a patch that already applies in reverse is considered applied.
     $patchDir = Join-Path $root 'tools\dr2-extract\vendor-patches'
     foreach ($patch in (Get-ChildItem -Path $patchDir -Filter "$($repo.Name)-*.patch" -ErrorAction SilentlyContinue)) {
-        git -C $dir apply --check -R $patch.FullName 2>$null
+        git -C $dir -c core.autocrlf=false apply --check --ignore-whitespace -R $patch.FullName 2>$null
         if ($LASTEXITCODE -eq 0) { Write-Host "  patch already applied: $($patch.Name)"; continue }
-        git -C $dir apply $patch.FullName
+        git -C $dir -c core.autocrlf=false apply --ignore-whitespace $patch.FullName
         if ($LASTEXITCODE -ne 0) { throw "applying $($patch.Name) to $dir failed" }
         Write-Host "  patch applied: $($patch.Name)"
     }
