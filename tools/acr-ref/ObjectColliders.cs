@@ -85,10 +85,10 @@ internal sealed class RoadProbe
     readonly HashSet<string> _roadSurfaces;
     public readonly double MaxPen, HMin, HMax;   // cm
 
-    public RoadProbe(RoadCorridor road, SurfaceGrid surfaces, Toml cfg)
+    public RoadProbe(RoadCorridor road, SurfaceGrid surfaces, Toml cfg, HashSet<string>? roadSurfaces = null)
     {
         Road = road; _surfaces = surfaces;
-        _roadSurfaces = cfg.Arr("road", "surfaces").Cast<string>().ToHashSet();
+        _roadSurfaces = roadSurfaces ?? cfg.Arr("road", "surfaces").Cast<string>().ToHashSet();
         MaxPen = cfg.Num("road", "max_penetration_m") * 100; HMin = cfg.Num("road", "car_height_min_m") * 100; HMax = cfg.Num("road", "car_height_max_m") * 100;
     }
 
@@ -150,6 +150,7 @@ internal static class ObjectColliders
         public List<Shape> Kept = new();
         public JsonObject Report = new();
         public RoadProbe Probe = null!;
+    public HashSet<string> RoadCodes = new();
     }
 
     // ---- frames ----
@@ -241,7 +242,7 @@ internal static class ObjectColliders
         var templates = j["templates"]!.AsObject();
         var skipClasses = cfg.Arr("skip", "shape_classes").Cast<string>().ToHashSet();
         var skipBreaks = cfg.Arr("skip", "breaks_on_impulse").Cast<string>().ToHashSet();
-        var probe = res.Probe = new RoadProbe(road, surfaces, cfg);
+        var probe = res.Probe = new RoadProbe(road, surfaces, cfg, res.RoadCodes = RoadSurfaces.For(cfg.Arr("road", "surfaces"), surfaces, centreUe));
         double maxPen = probe.MaxPen;
         int coneSeg = (int)cfg.Num("shapes", "cone_segments");
         var wallOverride = cfg["template_wall"];
@@ -416,5 +417,33 @@ internal static class ObjectColliders
         w.Write(physMaterial);
         w.Write(ownerBytes);
         return ms.ToArray();
+    }
+}
+
+/// Which DR2 ground codes are the road. config [road] surfaces are New Zealand's (GD0+, CATG); a stage whose centreline mostly
+/// runs over other codes (tarmac, snow, other gravel classes) takes the codes found under the centreline instead.
+internal static class RoadSurfaces
+{
+    public static HashSet<string> For(IEnumerable<object> configured, SurfaceGrid surfaces, IReadOnlyList<V3> centreUe, double minShare = 0.05, string? note = null)
+    {
+        var cfg = configured.Cast<string>().ToHashSet();
+        var count = new Dictionary<string, int>(); int n = 0;
+        for (int i = 0; i + 1 < centreUe.Count; i++)
+        {
+            double hx = centreUe[i + 1].X - centreUe[i].X, hy = centreUe[i + 1].Y - centreUe[i].Y, hl = Math.Sqrt(hx * hx + hy * hy);
+            if (hl < 1) continue;
+            double rx = -hy / hl, ry = hx / hl;
+            foreach (double off in new[] { -200.0, 0, 200 })
+            {
+                n++;
+                var s = surfaces.At((centreUe[i].X + rx * off) / 100, (centreUe[i].Y + ry * off) / 100);
+                if (s is not null) count[s] = count.GetValueOrDefault(s) + 1;
+            }
+        }
+        if (n == 0 || count.Where(kv => cfg.Contains(kv.Key)).Sum(kv => kv.Value) >= 0.5 * n) return cfg;
+        var found = count.Where(kv => kv.Value >= minShare * n).Select(kv => kv.Key).ToHashSet();
+        Console.WriteLine($"road surfaces: the configured {string.Join(", ", cfg)} cover under half of the centreline; using the codes found under it: " +
+                          string.Join(", ", count.OrderByDescending(kv => kv.Value).Take(8).Select(kv => $"{kv.Key} {100.0 * kv.Value / n:0}%")) + $" (kept: {string.Join(", ", found)})");
+        return found;
     }
 }

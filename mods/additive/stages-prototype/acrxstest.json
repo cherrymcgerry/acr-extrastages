@@ -1,0 +1,26 @@
+{
+  "Id": "AcrXsTest",
+  "Level": "/Game/AcrXs/Stages/AcrXsTest/AcrXsTest",
+  "Location": { "Row": "Wales" },
+  "Track": { "Template": "WalesS4HafrenSouth", "Name": "ACR-XS TEST" },
+  "Variants": [
+    {
+      "Row": "AcrXsTestFullForward",
+      "Template": "WelesS4HafrenSouthFullForward",
+      "Name": "ACR-XS TEST",
+      "StageName": "ACR-XS TEST",
+      "Length": 1.23
+    }
+  ],
+  "Clone": {
+    "Comment": "level content: Hafren South copied under the stage's own package paths (build.ps1 -> acr-additive relocate)",
+    "Packages": {
+      "/Game/Levels/WalesS4HafrenSouth": "/Game/AcrXs/Stages/AcrXsTest/AcrXsTest",
+      "/Game/Environments/WalesS4HafrenSouth/DataAssets/DA_WalesS4HafrenSouthBakedData": "/Game/AcrXs/Stages/AcrXsTest/DA_AcrXsTestBakedData"
+    },
+    "Objects": {
+      "WalesS4HafrenSouth": "AcrXsTest",
+      "DA_WalesS4HafrenSouthBakedData": "DA_AcrXsTestBakedData"
+    }
+  }
+}

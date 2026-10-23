@@ -210,8 +210,10 @@ internal static class TerrainBake
                     continue;
                 }
 
+                // docs/dr2-formats.md: Color G,B,A bytes are slice×8+3 for layers a,b,c (R unused here).
                 var col = rds.Raw("Color", 0, a);
-                (t.La, t.Lb, t.Lc) = ((byte)((int)col.Y / 8), (byte)((int)col.Z / 8), (byte)((int)col.W / 8));
+                static byte Layer(float channel) => (byte)Math.Max(0, ((int)channel - 3) / 8);
+                (t.La, t.Lb, t.Lc) = (Layer(col.Y), Layer(col.Z), Layer(col.W));
                 Fill(rds, a, out t.A0, out t.R0, out t.M0, out t.W0);
                 Fill(rds, b, out t.A1, out t.R1, out t.M1, out t.W1);
                 Fill(rds, c, out t.A2, out t.R2, out t.M2, out t.W2);
@@ -292,7 +294,19 @@ internal static class TerrainBake
         var maxLayer = tris.Max(t => Math.Max(t.La, Math.Max(t.Lb, t.Lc)));
         if (maxLayer >= slices.Length)
         {
-            throw new InvalidDataException($"ground bake: layer index {maxLayer} but the array has {slices.Length} slices");
+            // Rare out-of-range Color encodings (seen on poland_rally_01); clamp so bake can proceed.
+            var clamped = 0;
+            var last = (byte)(slices.Length - 1);
+            for (var i = 0; i < tris.Count; i++)
+            {
+                var t = tris[i];
+                if (t.La > last) { t.La = last; clamped++; }
+                if (t.Lb > last) { t.Lb = last; clamped++; }
+                if (t.Lc > last) { t.Lc = last; clamped++; }
+                tris[i] = t;
+            }
+
+            Console.WriteLine($"ground bake: warning: layer index {maxLayer} >= {slices.Length} slices; clamped {clamped} vertex refs");
         }
 
         // Road layers: slices whose area lies mostly on the road band (within the gates' left/right edges + 1 m).

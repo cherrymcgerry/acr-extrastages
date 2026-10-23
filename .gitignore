@@ -1,7 +1,32 @@
-# extracted game data, build tools and packed mods (never commit game assets)
+# Extracted game data, build tools, generated stage specs and packed mods (never commit game assets).
+# work/ also holds the generated stage specs (work/acr/specs/*.json).
 work/
-# third-party clones
+/work/acr/specs/
+/mods/additive/stages/
+
+# Third-party clones (scripts/bootstrap.ps1)
 third_party/
+
 # .NET build output
 bin/
 obj/
+
+# Game-derived or proprietary binaries: never commit
+*.usmap
+oo2core*
+*.pak
+*.ucas
+*.utoc
+
+# DiRT Rally 2.0 art derivatives (loading screens) and other generated images
+loading-contact*.png
+
+# Rust build output (tools/stage-validate)
+target/
+
+# Release archives
+dist/
+*.zip
+
+# Stray files
+/=

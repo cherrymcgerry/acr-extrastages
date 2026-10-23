@@ -7,6 +7,14 @@
 # - A row's SplineDistanceM is where the corner starts (metres along the CenterSpline from its first point) and
 #   LengthM spans the corner; corner rows and DistNN straight rows tile the road one after another.
 # Anything not mapped here is logged as unmapped in the stage report and dropped.
+#
+# Survey of the 30 batch stages (scripts/pacenote-survey-ir.ps1 -> work/acr/batch/pacenote-survey.md): every corner
+# direction, severity 1-6/square/hairpin, distance 20/30 and finish is mapped. The only unmapped items are
+#   - kind "unknown" (raw call types 5/7/8/9, 212 tokens): meaning not verified (docs/dr2-formats.md says type 9 "may be
+#     jump/crest from one transcription match"); guessing a token (Crest/Jump/Caution) would put wrong calls in the
+#     co-driver audio, so they are dropped on purpose;
+#   - modifier_a_1 (30), modifier_b_1 (17), modifier_b_3 (43): raw codes, not decoded.
+# Re-survey after a prepare run; extend this file only with a code whose meaning is verified against DR2 audio/text.
 
 [direction]
 left = "Left"
@@ -34,6 +42,31 @@ dont_cut = "DontCut"
 "20" = "And"
 "30" = "And"
 
+# DR2 spoken distances of 40 m and more ("distance 50", "100", "120", "150"; docs/stage-ir.md `distance_call_m`). ACR says
+# these as a DistNN row on the straight between two corner rows (vanilla: DT_PacenoteHafrenSouthForward has 23 DistNN rows in
+# 84, 25-165 m long; audio exists for every DistNN token in DT_EN0, DT_EN1 lacks Dist130 and Dist170). The row's token is the DR2 value snapped
+# to the nearest of [layout] straights / straight_values_m (the only DR2 value that is not one of them is 120 -> Dist130).
+#   source = "dr2": a DR2 distance between two corners is called with its snapped value if the geometric gap of the straight
+#                   agrees (gap within value / agree_ratio .. value * agree_ratio), else the geometry token is used (the road
+#                   we built is what the player sees); gaps of short_min_m .. [layout] straight_min_m get a row too when DR2
+#                   spoke a short distance (<= short_max_wish_m), like the host's 25-40 m DistNN rows
+#   source = "geometry": DR2 distance values are ignored (v1.5 behaviour: geometry rows only)
+# "distance null" tokens (unverified distanceLink code) have no value: the geometry (straight_min_m) decides.
+# Distances of 20 and 30 are "And" conjunctions above, not DistNN calls.
+#
+# Row encoding (the reason the v1.5-v1.11 tables never showed or said a distance): in all 45 vanilla DT_Pacenote* tables 1246 of
+# 1360 DistNN rows are the tail of a chain, i.e. the row BEFORE has LinkToNext = true, and the DistNN row itself never links
+# onward ("Left3 -> Dist60", then the next corner starts a new chain). Our DistNN rows stood alone after an unlinked corner row.
+# link_to_previous = true sets LinkToNext on the row before every DistNN row. (Vanilla also never uses Dist350/Dist400/
+# LongStraight/VeryLongStraight, only Dist40..Dist300 and GoStraight; DT_EN0 has audio for them, so they are kept.)
+[distance_calls]
+source = "dr2"
+link_to_previous = true
+min_dr2_m = 40
+agree_ratio = 1.5
+short_min_m = 20
+short_max_wish_m = 60
+
 [finish]
 finish = "Finish"
 
@@ -41,8 +74,10 @@ finish = "Finish"
 [layout]
 # Rows of corners from the same DR2 call (one recorded phrase) are linked (LinkToNext) and the later ones get a
 # conjunction, like the host's 2-3 row chains. Between calls, straights (corner end -> next corner start) of at
-# least straight_min_m get a DistNN row with the largest token not above the gap.
+# least straight_min_m get a DistNN row (the token nearest to the gap, see straight_snap; [distance_calls] adds the DR2 value).
 straight_min_m = 40
+# nearest: the token closest to the gap (host: 58 m -> Dist60, 54 m -> Dist50); floor: largest token not above the gap
+straight_snap = "nearest"
 straights = ["Dist40", "Dist50", "Dist60", "Dist70", "Dist80", "Dist90", "Dist100", "Dist130", "Dist150", "Dist170", "Dist200", "Dist250", "Dist300", "Dist350", "Dist400"]
 straight_values_m = [40, 50, 60, 70, 80, 90, 100, 130, 150, 170, 200, 250, 300, 350, 400]
 long_straight = "LongStraight"

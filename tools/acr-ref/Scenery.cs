@@ -26,6 +26,7 @@ internal static class Scenery
     // 2 bIsSpatiallyLoaded, 3 DataLayers, 4 bClientOnlyVisible, 5 bIsHLOD, 6 bBlockOnSlowLoading, 7 ContentBundleID,
     // 8 CellDebugColor, 9 CellGuid, 10 SourceCellGuid, 11 RuntimeCellData
     const int SlotDataLayers = 3;
+    const int SlotAlwaysLoaded = 1;
 
     public static int Survey(Options o)
     {
@@ -129,6 +130,43 @@ internal static class Scenery
                 if (n < 0) throw new InvalidDataException($"{l} is not in the persistent level's name map");
                 w.Write(n); w.Write(0);
             }
+        }
+        w.Write(d, c.End, d.Length - c.End);
+        return ms.ToArray();
+    }
+
+    /// bIsAlwaysLoaded of a streaming cell export (slot 1, one value byte when non-zero), and the cell's other slots / layers.
+    internal static (bool alwaysLoaded, string describe) CellState(LegacyPackage pkg, byte[] d)
+    {
+        var c = ParseCell(d);
+        bool on = c.Values.TryGetValue(SlotAlwaysLoaded, out var v) && d[v.at] != 0;
+        var layers = Layers(pkg, d, c);
+        return (on, $"slots {string.Join(",", c.Slots.Select(s => s.Index + (s.Zero ? "z" : "")))}; layers {(layers.Count == 0 ? "none" : string.Join("+", layers.Select(x => x.Replace("DataLayer_", "")[..4])))}");
+    }
+
+    /// bIsSpatiallyLoaded of a streaming cell export (slot 2).
+    internal static bool SpatiallyLoaded(byte[] d)
+    {
+        var c = ParseCell(d);
+        return c.Values.TryGetValue(2, out var v) && d[v.at] != 0;
+    }
+
+    internal const string CellExportClass = CellClass;
+
+    /// The cell export with bIsAlwaysLoaded set (a non-zero bool: its slot gets one value byte among the values).
+    internal static byte[] WithAlwaysLoaded(byte[] d)
+    {
+        var c = ParseCell(d);
+        using var ms = new MemoryStream();
+        using var w = new BinaryWriter(ms);
+        var slots = c.Slots.Where(s => s.Index != SlotAlwaysLoaded).Append(new Unv.Slot(SlotAlwaysLoaded, false)).OrderBy(s => s.Index).ToList();
+        Unv.WriteHeader(w, slots);
+        foreach (var s in slots)
+        {
+            if (s.Zero) continue;
+            if (s.Index == SlotAlwaysLoaded) { w.Write((byte)1); continue; }
+            var (at, len) = c.Values[s.Index];
+            w.Write(d, at, len);
         }
         w.Write(d, c.End, d.Length - c.End);
         return ms.ToArray();

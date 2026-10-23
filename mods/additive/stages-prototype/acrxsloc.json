@@ -1,0 +1,31 @@
+{
+  "Id": "AcrXsLoc",
+  "Level": "/Game/AcrXs/Stages/AcrXsLoc/AcrXsLoc",
+  "Location": {
+    "Row": "NewZealand",
+    "Template": "Wales",
+    "Name": "New Zealand",
+    "Description": "Hawke's Bay"
+  },
+  "Track": { "Template": "WalesS4HafrenSouth", "Name": "ACR-XS LOC" },
+  "Variants": [
+    {
+      "Row": "AcrXsLocFullForward",
+      "Template": "WelesS4HafrenSouthFullForward",
+      "Name": "ACR-XS LOC",
+      "StageName": "ACR-XS LOC",
+      "Length": 1.23
+    }
+  ],
+  "Clone": {
+    "Comment": "Second Hafren clone under a new location row, to prove Location.Template in the menu",
+    "Packages": {
+      "/Game/Levels/WalesS4HafrenSouth": "/Game/AcrXs/Stages/AcrXsLoc/AcrXsLoc",
+      "/Game/Environments/WalesS4HafrenSouth/DataAssets/DA_WalesS4HafrenSouthBakedData": "/Game/AcrXs/Stages/AcrXsLoc/DA_AcrXsLocBakedData"
+    },
+    "Objects": {
+      "WalesS4HafrenSouth": "AcrXsLoc",
+      "DA_WalesS4HafrenSouthBakedData": "DA_AcrXsLocBakedData"
+    }
+  }
+}

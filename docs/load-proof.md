@@ -17,24 +17,24 @@ Two independent mod containers, built and re-read offline with CUE4Parse.
 
 | Container | Overrides | What you should see |
 |---|---|---|
-| `zz_acrdirt_test_P` (.utoc/.ucas/.pak, ~40 KB) | `/Game/Data/Database/Main/TrackSelection/DT_TracksVariants` — FullForward "Afon Bidno" `Length` 4.8 → **42.0** | Stage length shows 42 km |
-| `zz_acrdirt_ramp_P` (~172 MB) | `/Game/Environments/WalesS4HafrenSouth/DataAssets/DA_WalesS4HafrenSouthBakedData` — one extra mesh collider | Invisible ramp launches the car ~47 m after the start line |
+| `zz_acrxs_test_P` (.utoc/.ucas/.pak, ~40 KB) | `/Game/Data/Database/Main/TrackSelection/DT_TracksVariants` — FullForward "Afon Bidno" `Length` 4.8 → **42.0** | Stage length shows 42 km |
+| `zz_acrxs_ramp_P` (~172 MB) | `/Game/Environments/WalesS4HafrenSouth/DataAssets/DA_WalesS4HafrenSouthBakedData` — one extra mesh collider | Invisible ramp launches the car ~47 m after the start line |
 
 ## 0. Build (skip if `work\acr\dist` already has the six files)
 
 ```powershell
 cd C:\Users\robbe\Projects\acr-dirt
-pwsh -NoProfile -File mods\acrdirt-loadproof\build.ps1            # add -Verify to re-read with CUE4Parse
+pwsh -NoProfile -File mods\loadproof\build.ps1            # add -Verify to re-read with CUE4Parse
 ```
 
-Output: `work\acr\dist-loadproof\zz_acrdirt_test_P.{utoc,ucas,pak}` and `zz_acrdirt_ramp_P.{utoc,ucas,pak}`.
+Output: `work\acr\dist-loadproof\zz_acrxs_test_P.{utoc,ucas,pak}` and `zz_acrxs_ramp_P.{utoc,ucas,pak}`.
 
 ## 1. Install (manual, fully reversible)
 
 ```powershell
 $paks = 'C:\Program Files (x86)\Steam\steamapps\common\Assetto Corsa Rally\acr\Content\Paks'
 New-Item -ItemType Directory -Force "$paks\~mods" | Out-Null
-Copy-Item C:\Users\robbe\Projects\acr-dirt\work\acr\dist\zz_acrdirt_* "$paks\~mods\"
+Copy-Item C:\Users\robbe\Projects\acr-dirt\work\acr\dist\zz_acrxs_* "$paks\~mods\"
 ```
 
 `~mods` did not exist before (checked on 2026-10-11), so nothing of the game is overwritten. You can
@@ -63,7 +63,7 @@ install only the `test` container first if you want to isolate test (a).
    - **Nothing happens** (and test (a) passed) → BakedData mesh colliders are *not* what physics uses here
      (or are rebuilt at runtime). Report this — it changes the authoring recommendation.
    - **Game crashes / hangs on stage load** → the edited asset is malformed for the game's reader.
-     Remove `zz_acrdirt_ramp_P.*` and report; include the newest UE log if you can find one (usually
+     Remove `zz_acrxs_ramp_P.*` and report; include the newest UE log if you can find one (usually
      `%LOCALAPPDATA%\acr\Saved\Logs\` for UE games — path not verified for ACR).
    - **Car falls through the world** → the asset loaded but colliders were dropped; report with log.
 
@@ -73,7 +73,7 @@ the finish). Coming from that side you would hit its 1 m high edge like a kerb/w
 ## 4. Rollback
 
 ```powershell
-Remove-Item "$paks\~mods\zz_acrdirt_*"
+Remove-Item "$paks\~mods\zz_acrxs_*"
 Remove-Item "$paks\~mods" -ErrorAction SilentlyContinue   # only removes the folder if it is empty
 ```
 

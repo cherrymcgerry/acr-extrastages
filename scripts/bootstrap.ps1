@@ -27,4 +27,15 @@ foreach ($repo in $repos) {
     git -C $dir -c advice.detachedHead=false checkout --quiet $repo.Commit
     if ($LASTEXITCODE -ne 0) { throw "checkout of $($repo.Commit) in $dir failed" }
     Write-Host "$($repo.Name) @ $($repo.Commit)"
+
+    # Local fixes for upstream, tracked in tools/dr2-extract/vendor-patches/<name>-*.patch.
+    # Idempotent: a patch that already applies in reverse is considered applied.
+    $patchDir = Join-Path $root 'tools\dr2-extract\vendor-patches'
+    foreach ($patch in (Get-ChildItem -Path $patchDir -Filter "$($repo.Name)-*.patch" -ErrorAction SilentlyContinue)) {
+        git -C $dir apply --check -R $patch.FullName 2>$null
+        if ($LASTEXITCODE -eq 0) { Write-Host "  patch already applied: $($patch.Name)"; continue }
+        git -C $dir apply $patch.FullName
+        if ($LASTEXITCODE -ne 0) { throw "applying $($patch.Name) to $dir failed" }
+        Write-Host "  patch applied: $($patch.Name)"
+    }
 }

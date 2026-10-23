@@ -79,7 +79,7 @@ Snake_case keys; `null` where a value is unavailable. Top level:
 
 | key | type | meaning |
 |---|---|---|
-| `schema`, `version` | string, int | `"acr-dirt/stage-ir"`, `2` |
+| `schema`, `version` | string, int | `"acrxs/stage-ir"`, `2` |
 | `id` | string | stage id, e.g. `new_zealand_rally_01_route_5` |
 | `name` | string | English stage name (`language_eng.lng` key `lng_<location>_route_<n>`) |
 | `location` | object | `id` (location folder), `country` (archive prefix), `name` (e.g. "Hawkes Bay, New Zealand"), `archive`, `route_index` |

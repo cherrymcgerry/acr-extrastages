@@ -2,8 +2,8 @@
 .SYNOPSIS
   Rebuilds the two ACR load-proof IoStore containers from the user's own game install.
 
-  zz_acrdirt_test_P  DT_TracksVariants with Hafren South "Afon Bidno" FullForward Length 4.8 -> 42.0 km
-  zz_acrdirt_ramp_P  DA_WalesS4HafrenSouthBakedData with one extra always-active mesh collider
+  zz_acrxs_test_P  DT_TracksVariants with Hafren South "Afon Bidno" FullForward Length 4.8 -> 42.0 km
+  zz_acrxs_ramp_P  DA_WalesS4HafrenSouthBakedData with one extra always-active mesh collider
                      (an invisible 6 m x 8 m, 1 m high gravel ramp ~47 m after the FullForward start line)
 
   Everything is written under work/ (gitignored). Nothing is copied into the game install;
@@ -68,9 +68,9 @@ Run $acrRef baked-add-ramp --uexp (Join-Path $legacy "$bdRel.uexp") --ref-collid
 
 $dist = Join-Path $work 'dist-loadproof'
 New-Item -ItemType Directory -Force $dist | Out-Null
-Remove-Item (Join-Path $dist 'zz_acrdirt_*') -ErrorAction SilentlyContinue
-Run $Retoc to-zen --version UE5_6 $modDt (Join-Path $dist 'zz_acrdirt_test_P.utoc')
-Run $Retoc to-zen --version UE5_6 $modRamp (Join-Path $dist 'zz_acrdirt_ramp_P.utoc')
+Remove-Item (Join-Path $dist 'zz_acrxs_*') -ErrorAction SilentlyContinue
+Run $Retoc to-zen --version UE5_6 $modDt (Join-Path $dist 'zz_acrxs_test_P.utoc')
+Run $Retoc to-zen --version UE5_6 $modRamp (Join-Path $dist 'zz_acrxs_ramp_P.utoc')
 
 if ($Verify) {
     $check = Join-Path $work 'check'
@@ -78,7 +78,7 @@ if ($Verify) {
     Remove-Item -Recurse -Force $check -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $checkPaks | Out-Null
     Copy-Item (Join-Path $paks 'global.*') $checkPaks
-    Copy-Item (Join-Path $dist 'zz_acrdirt_*') $checkPaks
+    Copy-Item (Join-Path $dist 'zz_acrxs_*') $checkPaks
     Run $acrRef export ($dtRel.Replace('\', '/') + '.uasset') --game $check --out (Join-Path $check 'dt.json')
     $row = (Get-Content -Raw (Join-Path $check 'dt.json') | ConvertFrom-Json)[0].Rows.WelesS4HafrenSouthFullForward
     "DT check: FullForward Length = $($row.Length) (expected 42)"
@@ -87,4 +87,4 @@ if ($Verify) {
     "BakedData check: see $check\summary (expect 735 mesh colliders, last one in the 'None' stride set)"
 }
 
-Get-ChildItem $dist 'zz_acrdirt_*' | Format-Table Name, Length
+Get-ChildItem $dist 'zz_acrxs_*' | Format-Table Name, Length

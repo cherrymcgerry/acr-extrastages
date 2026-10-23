@@ -1,0 +1,9 @@
+<Project>
+  <!-- One source of truth for the release version: the VERSION file at the repository root (a single line, SemVer,
+       e.g. 0.1.0-beta.1). It must match the newest "## [x.y.z]" heading in CHANGELOG.md; scripts/package.ps1 and the
+       release workflow check that, and that the git tag is v<VERSION>. Applies to the .NET projects under tools/. -->
+  <PropertyGroup>
+    <AcrXsVersion>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\VERSION').Trim())</AcrXsVersion>
+    <Version>$(AcrXsVersion)</Version>
+  </PropertyGroup>
+</Project>

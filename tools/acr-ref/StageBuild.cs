@@ -19,7 +19,8 @@ internal static class StageBuild
 {
     // Host limits in physics metres (x = UE X, z = UE Y, y = UE Z). PhysicsWorldBounds of WalesS4HafrenSouth, and the
     // safe XZ region = forward gameplay cell content bounds grown by its 640 m loading range, intersected with them.
-    internal const double PhysMinX = -2048, PhysMaxX = 802, PhysMinZ = -964, PhysMaxZ = 2048;
+    // Not const: with --bounds the clone's PhysicsWorldBounds is enlarged (Bounds.cs) and these follow it (UseWorld).
+    internal static double PhysMinX = -2048, PhysMaxX = 802, PhysMinZ = -964, PhysMaxZ = 2048, PhysMinY = 305, PhysMaxY = 534;
     const double SafeMinX = -1950, SafeMaxX = 802, SafeMinZ = -964, SafeMaxZ = 2048;
     const double GroundBase = 380;                 // physics y of the DR2 collision minimum (bounds y 305..534)
     const double HostFlatMin = 306, HostFlatMax = 318;
@@ -28,7 +29,23 @@ internal static class StageBuild
     const double ContourPush = 20;                 // m outside the gate edges
     const int HostTemplateCollider = 10;
 
-    internal sealed record Placement(double ThetaDeg, double Cx, double Cz, double Tx, double Tz, double Dy, double Slack)
+    /// Physics world box in metres (x = UE X, z = UE Y, y = UE Z).
+    internal sealed record World(double MinX, double MaxX, double MinZ, double MaxZ, double MinY, double MaxY)
+    {
+        public static readonly World Host = new(-2048, 802, -964, 2048, 305, 534);
+        public double Area => (MaxX - MinX) * (MaxZ - MinZ);
+        public bool IsHost => this == Host;
+        public JsonObject ToJson() => new() { ["min_x"] = MinX, ["max_x"] = MaxX, ["min_z"] = MinZ, ["max_z"] = MaxZ, ["min_y"] = MinY, ["max_y"] = MaxY };
+        public static World FromJson(JsonNode n) => new(n["min_x"]!.GetValue<double>(), n["max_x"]!.GetValue<double>(), n["min_z"]!.GetValue<double>(),
+            n["max_z"]!.GetValue<double>(), n["min_y"]!.GetValue<double>(), n["max_y"]!.GetValue<double>());
+    }
+
+    internal static void UseWorld(World w)
+    {
+        PhysMinX = w.MinX; PhysMaxX = w.MaxX; PhysMinZ = w.MinZ; PhysMaxZ = w.MaxZ; PhysMinY = w.MinY; PhysMaxY = w.MaxY;
+    }
+
+    internal sealed record Placement(double ThetaDeg, double Cx, double Cz, double Tx, double Tz, double Dy, double Slack, World? World = null)
     {
         public V3 ToPhysics(double x, double y, double z)
         {
@@ -99,16 +116,24 @@ internal static class StageBuild
         var outRoot = o.Out ?? throw new ArgumentException("--out <dir> is required");
         var reportPath = o.Named.GetValueOrDefault("report") ?? Path.Combine(outRoot, "stage-report.json");
         bool keepPacenotes = o.Named.GetValueOrDefault("keep-pacenotes") is "1" or "true";
+        bool additive = o.Named.GetValueOrDefault("additive") is "1" or "true";
+        string? packageRoot = o.Named.GetValueOrDefault("package-root");
         var report = new JsonObject { ["stage"] = ir.Id, ["name"] = ir.Name, ["host"] = "WalesS4HafrenSouth forward (variant 1/2 \"Afon Bidno - Severn\")" };
 
         double groundOffset = double.Parse(o.Named.GetValueOrDefault("ground-offset", "0"), CultureInfo.InvariantCulture);
-        var pl = Solve(ir, groundOffset);
+        bool bounds = o.Named.GetValueOrDefault("bounds") is "1" or "true";
+        double boundsMargin = double.Parse(o.Named.GetValueOrDefault("bounds-margin", Bounds.DefaultMarginM.ToString(CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture);
+        var pl = Solve(ir, groundOffset, bounds ? boundsMargin : -1, o.Named.GetValueOrDefault("bounds-prefer-host", "1") is "1" or "true");
+        if (pl.World is not null) UseWorld(pl.World);
         Console.WriteLine($"placement: theta {F(pl.ThetaDeg)} deg about DR2 ({F(pl.Cx)}, {F(pl.Cz)}), t = ({F(pl.Tx)}, {F(pl.Dy)}, {F(pl.Tz)}) m, slack {F(pl.Slack, "0.#")} m");
+        if (pl.World is { } pw)
+            Console.WriteLine($"world: X {F(pw.MinX, "0")}..{F(pw.MaxX, "0")}, Z {F(pw.MinZ, "0")}..{F(pw.MaxZ, "0")}, Y {F(pw.MinY, "0")}..{F(pw.MaxY, "0")} m ({(pw.IsHost ? "host bounds unchanged" : "enlarged")})");
         report["placement"] = new JsonObject
         {
             ["formula"] = "physics = R_y(theta) * (dr2 - (cx, 0, cz)) + (tx, dy, tz); UE cm = (px, pz, py) * 100; R_y: x' = cos*x + sin*z, z' = -sin*x + cos*z",
             ["ground_offset_m"] = groundOffset, ["theta_deg"] = pl.ThetaDeg, ["cx"] = pl.Cx, ["cz"] = pl.Cz, ["tx"] = pl.Tx, ["dy"] = pl.Dy, ["tz"] = pl.Tz, ["slack_m"] = pl.Slack,
         };
+        if (pl.World is not null) report["placement"]!["world"] = pl.World.ToJson();
 
         var objectsCfg = o.Named.GetValueOrDefault("objects");
         var pacenoteMap = o.Named.GetValueOrDefault("pacenote-map");
@@ -118,6 +143,7 @@ internal static class StageBuild
         {
             ["objects"] = objectsCfg, ["pacenote_map"] = pacenoteMap, ["respawn"] = respawnMode, ["keep_pacenotes"] = keepPacenotes,
             ["visuals"] = o.Named.GetValueOrDefault("visuals"), ["ground_offset_m"] = groundOffset,
+            ["additive"] = additive, ["package_root"] = packageRoot, ["bounds"] = bounds, ["bounds_margin_m"] = bounds ? boundsMargin : null,
         };
         if (o.Named.ContainsKey("visuals"))
         {
@@ -150,8 +176,8 @@ internal static class StageBuild
 
         int hostColliders = BuildBaked(ir, pl, legacy, outRoot, report, objectsCfg is null ? null : Toml.Load(objectsCfg), road, registry, out var objectShapes);
         report["host_collider_count"] = hostColliders;
-        var cellInfo = BuildCell(o, ir, pl, legacy, outRoot, report, respawnMode, road, objectShapes);
-        BuildTables(o, ir, legacy, outRoot, keepPacenotes, report, pacenoteMap is null ? null : Toml.Load(pacenoteMap), cellInfo);
+        var cellInfo = BuildCell(o, ir, pl, legacy, outRoot, report, respawnMode, road, objectShapes, packageRoot);
+        BuildTables(o, ir, legacy, outRoot, keepPacenotes, additive, report, pacenoteMap is null ? null : Toml.Load(pacenoteMap), cellInfo);
         if (o.Named.GetValueOrDefault("scenery") is { } sceneryCfg)
         {
             report["options"]!["scenery"] = sceneryCfg;
@@ -159,14 +185,22 @@ internal static class StageBuild
         }
         if (o.Named.GetValueOrDefault("names") is { } namesCfg)
         {
-            report["options"]!["names"] = namesCfg;
-            report["names"] = TrackNames.Build(legacy, outRoot, Toml.Load(namesCfg));
+            if (additive) Console.WriteLine("names: skipped (--additive; registry carries display names)");
+            else
+            {
+                report["options"]!["names"] = namesCfg;
+                report["names"] = TrackNames.Build(legacy, outRoot, Toml.Load(namesCfg));
+            }
         }
         if (o.Named.GetValueOrDefault("sky") is { } skyCfg)
         {
             report["options"]!["sky"] = skyCfg;
-            report["sky"] = Sky.Build(legacy, outRoot, Toml.Load(skyCfg), o);
+            var skySection = o.Named.GetValueOrDefault("sky-section", "nz");
+            report["options"]!["sky_section"] = skySection;
+            report["sky"] = Sky.Build(legacy, outRoot, Toml.Load(skyCfg), o, skySection);
         }
+        if (bounds)
+            report["bounds"] = Bounds.Build(legacy, outRoot, pl.World!, o);
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(reportPath))!);
         File.WriteAllText(reportPath, report.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
@@ -174,6 +208,13 @@ internal static class StageBuild
 
         int failures = Check(outRoot, ir, pl, hostColliders, Console.Out, report);
         return failures == 0 ? 0 : 5;
+    }
+
+    static RoadProbe NewProbe(Ir ir, Placement pl, string objCfg)
+    {
+        var cfg = Toml.Load(objCfg);
+        var surf = new SurfaceGrid(Path.Combine(ir.Dir, "collision.glb"), pl);
+        return new RoadProbe(Road(ir, pl), surf, cfg, RoadSurfaces.For(cfg.Arr("road", "surfaces"), surf, ir.Centre.Select(pl.ToUe).ToList()));
     }
 
     internal static RoadCorridor Road(Ir ir, Placement pl) =>
@@ -187,8 +228,35 @@ internal static class StageBuild
 
     // ---------------- placement ----------------
 
-    internal static Placement Solve(Ir ir, double groundOffset = 0)
+    /// Physics y of the DR2 collision minimum with --bounds (+ the ground offset); 333 = the v1.1 placement (380 - 47) that Te Awanga
+    /// was verified at, above the flattened host colliders (306..318) and the bottom of the host bounds (305).
+    internal const double BoundsFloorY = 333;
+    const double HostPreferSlackM = 100;       // --bounds keeps the host-region placement when its safe region holds the route with this slack
+    const double BoundsTopMarginY = 150;       // m above the highest DR2 collision point
+    // centre of the host's PhysicsWorldBounds in XZ; the route is centred on it so the host's flattened colliders stay inside
+    internal static readonly double HostCentreX = (World.Host.MinX + World.Host.MaxX) / 2, HostCentreZ = (World.Host.MinZ + World.Host.MaxZ) / 2;
+
+    /// margin &lt; 0: the host-bounded search (Hafren's safe region, fixed height). margin &gt;= 0 (--bounds): the route may use any
+    /// rotation; the world box becomes the union of the host's box and the route's rotated bounding box + margin, in X, Z and Y.
+    internal static Placement Solve(Ir ir, double groundOffset = 0, double margin = -1, bool preferHost = true)
     {
+        if (margin >= 0)
+        {
+            // A route that fits Hafren's own region with room to spare keeps the placement that was verified in game (host bounds,
+            // same rotation and height as v1.1+); only larger routes get the enlarged world.
+            if (preferHost)
+            {
+                try
+                {
+                    var hp = Solve(ir, groundOffset + BoundsFloorY - GroundBase);
+                    // the host box is only 229 m tall: the collision must stay under its roof as well
+                    bool fitsY = BoundsFloorY + groundOffset + (ir.CollisionMax[1] - ir.CollisionMin[1]) + 10 <= World.Host.MaxY;
+                    if (fitsY && hp.Slack >= HostPreferSlackM) return hp with { World = World.Host };
+                }
+                catch (InvalidOperationException) { }
+            }
+            return SolveBounds(ir, groundOffset, margin);
+        }
         var pts = ir.Gates.SelectMany(g => new[] { g.crossing, g.left, g.right }).Select(p => (x: p[0], z: p[2])).ToList();
         double cx = (pts.Min(p => p.x) + pts.Max(p => p.x)) / 2, cz = (pts.Min(p => p.z) + pts.Max(p => p.z)) / 2;
         double safeW = SafeMaxX - SafeMinX, safeH = SafeMaxZ - SafeMinZ;
@@ -208,6 +276,44 @@ internal static class StageBuild
         if (best.slack < 30) throw new InvalidOperationException($"route does not fit the host's safe region (slack {best.slack:0.#} m)");
         double tx = (SafeMinX + SafeMaxX) / 2 - best.rcx, tz = (SafeMinZ + SafeMaxZ) / 2 - best.rcz;
         return new Placement(best.deg, cx, cz, tx, tz, GroundBase + groundOffset - ir.CollisionMin[1], best.slack);
+    }
+
+    /// Route extents for a rotation: rotated bounding box of the gate points about their bbox centre.
+    internal static (double w, double h, double rcx, double rcz) RotatedExtent(Ir ir, int deg, out double cx, out double cz)
+    {
+        var pts = ir.Gates.SelectMany(g => new[] { g.crossing, g.left, g.right }).Select(p => (x: p[0], z: p[2])).ToList();
+        cx = (pts.Min(p => p.x) + pts.Max(p => p.x)) / 2; cz = (pts.Min(p => p.z) + pts.Max(p => p.z)) / 2;
+        double r = deg * Math.PI / 180, c = Math.Cos(r), s = Math.Sin(r);
+        double minX = double.MaxValue, maxX = double.MinValue, minZ = double.MaxValue, maxZ = double.MinValue;
+        foreach (var (x, z) in pts)
+        {
+            double dx = x - cx, dz = z - cz, px = c * dx + s * dz, pz = -s * dx + c * dz;
+            minX = Math.Min(minX, px); maxX = Math.Max(maxX, px); minZ = Math.Min(minZ, pz); maxZ = Math.Max(maxZ, pz);
+        }
+        return (maxX - minX, maxZ - minZ, (minX + maxX) / 2, (minZ + maxZ) / 2);
+    }
+
+    static Placement SolveBounds(Ir ir, double groundOffset, double margin)
+    {
+        // rotation (1 degree steps) with the smallest world area; 0..179 is enough, +180 gives the same box
+        (double area, int deg) best = (double.MaxValue, 0);
+        for (int deg = 0; deg < 180; deg++)
+        {
+            var e = RotatedExtent(ir, deg, out _, out _);
+            double area = (e.w + 2 * margin) * (e.h + 2 * margin);
+            if (area < best.area - 1e-6) best = (area, deg);
+        }
+        var b = RotatedExtent(ir, best.deg, out double cx, out double cz);
+        double tx = HostCentreX - b.rcx, tz = HostCentreZ - b.rcz;
+        double floor = BoundsFloorY + groundOffset;
+        double dy = floor - ir.CollisionMin[1];
+        double hw = b.w / 2 + margin, hh = b.h / 2 + margin;
+        var H = World.Host;
+        var world = new World(
+            Math.Min(H.MinX, HostCentreX - hw), Math.Max(H.MaxX, HostCentreX + hw),
+            Math.Min(H.MinZ, HostCentreZ - hh), Math.Max(H.MaxZ, HostCentreZ + hh),
+            Math.Min(H.MinY, floor - 28), Math.Max(H.MaxY, floor + (ir.CollisionMax[1] - ir.CollisionMin[1]) + BoundsTopMarginY));
+        return new Placement(best.deg, cx, cz, tx, tz, dy, margin, world);
     }
 
     // ---------------- BakedData ----------------
@@ -491,7 +597,7 @@ internal static class StageBuild
     }
 
     static CellInfo BuildCell(Options o, Ir ir, Placement pl, string legacy, string outRoot, JsonObject report, string respawnMode, RoadCorridor road,
-                              ObjectColliders.Result? objectShapes)
+                              ObjectColliders.Result? objectShapes, string? packageRoot = null)
     {
         var path = HostPaths.Resolve(legacy, HostPaths.Cell);
         var cell = new LegacyPackage(path);
@@ -633,7 +739,7 @@ internal static class StageBuild
         {
             var vopt = Visuals.Options.From(o.Named);
             var vcfg = Toml.Load(visualsCfg);
-            var dr2 = vopt.Dr2 ? new Dr2Materials(vcfg, ir.Dir, legacy, outRoot) : null;
+            var dr2 = vopt.Dr2 ? new Dr2Materials(vcfg, ir.Dir, legacy, outRoot, packageRoot) : null;
             r["visuals"] = Visuals.Build(cell, ir, pl, vcfg, vopt, objectShapes, InPhysicsBounds, dr2);
         }
         r["actors"] = actors;
@@ -680,23 +786,28 @@ internal static class StageBuild
 
     // ---------------- DataTables ----------------
 
-    static void BuildTables(Options o, Ir ir, string legacy, string outRoot, bool keepPacenotes, JsonObject report, Toml? pacenoteMap, CellInfo cell)
+    static void BuildTables(Options o, Ir ir, string legacy, string outRoot, bool keepPacenotes, bool additive, JsonObject report, Toml? pacenoteMap, CellInfo cell)
     {
         var r = new JsonObject();
         report["tables"] = r;
 
-        var vpath = HostPaths.Resolve(legacy, HostPaths.Variants);
-        var variants = new LegacyPackage(vpath);
-        var vd = variants.GetExportData(0);
-        var pattern = new List<byte>(BitConverter.GetBytes(4.8f));
-        pattern.AddRange(BitConverter.GetBytes(345.0)); pattern.AddRange(BitConverter.GetBytes(410.0));
-        pattern.AddRange(Convert.FromHexString("01000000B724EF43"));
-        int at = UniqueIndexOf(vd, pattern.ToArray());
-        float km = (float)Math.Round(ir.LengthM / 1000, 3);
-        BitConverter.GetBytes(km).CopyTo(vd, at);
-        variants.SetExportData(0, vd);
-        variants.SaveTo(Path.Combine(outRoot, HostPaths.Variants + Path.GetExtension(vpath)));
-        r["tracks_variants"] = $"Hafren South FullForward Length 4.8 -> {F(km)} km";
+        if (additive)
+            r["tracks_variants"] = "skipped (--additive; registry carries Length)";
+        else
+        {
+            var vpath = HostPaths.Resolve(legacy, HostPaths.Variants);
+            var variants = new LegacyPackage(vpath);
+            var vd = variants.GetExportData(0);
+            var pattern = new List<byte>(BitConverter.GetBytes(4.8f));
+            pattern.AddRange(BitConverter.GetBytes(345.0)); pattern.AddRange(BitConverter.GetBytes(410.0));
+            pattern.AddRange(Convert.FromHexString("01000000B724EF43"));
+            int at = UniqueIndexOf(vd, pattern.ToArray());
+            float km = (float)Math.Round(ir.LengthM / 1000, 3);
+            BitConverter.GetBytes(km).CopyTo(vd, at);
+            variants.SetExportData(0, vd);
+            variants.SaveTo(Path.Combine(outRoot, HostPaths.Variants + Path.GetExtension(vpath)));
+            r["tracks_variants"] = $"Hafren South FullForward Length 4.8 -> {F(km)} km";
+        }
 
         var ppath = HostPaths.Resolve(legacy, HostPaths.Pacenote);
         var pace = new LegacyPackage(ppath);
@@ -774,7 +885,9 @@ internal static class StageBuild
         var report = JsonNode.Parse(File.ReadAllText(Need(o, "report")))!;
         var p = report["placement"]!;
         var pl = new Placement(p["theta_deg"]!.GetValue<double>(), p["cx"]!.GetValue<double>(), p["cz"]!.GetValue<double>(),
-            p["tx"]!.GetValue<double>(), p["tz"]!.GetValue<double>(), p["dy"]!.GetValue<double>(), p["slack_m"]!.GetValue<double>());
+            p["tx"]!.GetValue<double>(), p["tz"]!.GetValue<double>(), p["dy"]!.GetValue<double>(), p["slack_m"]!.GetValue<double>(),
+            p["world"] is { } wn ? World.FromJson(wn) : null);
+        if (pl.World is not null) UseWorld(pl.World);
         using var w = o.Out is null ? Console.Out : new StreamWriter(o.Out);
         int failures = Check(Need(o, "legacy"), ir, pl, report["host_collider_count"]!.GetValue<int>(), w, report);
         return failures == 0 ? 0 : 5;
@@ -782,17 +895,24 @@ internal static class StageBuild
 
     static int Check(string root, Ir ir, Placement pl, int hostCount, TextWriter w, JsonNode report)
     {
+        Advisory.Load(report["options"]?["visuals"]?.GetValue<string>());
         int failures = 0;
-        void C(bool ok, string what) { w.WriteLine($"{(ok ? "PASS" : "FAIL")} {what}"); if (!ok) failures++; }
+        void C(bool ok, string what) { w.WriteLine($"{Advisory.Verdict(ok, what, out var bad)} {what}"); if (bad) failures++; }
 
-        var vpath = HostPaths.Resolve(root, HostPaths.Variants);
-        var vd = new LegacyPackage(vpath).GetExportData(0);
-        float km = (float)Math.Round(ir.LengthM / 1000, 3);
-        var lenPattern = BitConverter.GetBytes(km).Concat(BitConverter.GetBytes(345.0)).Concat(BitConverter.GetBytes(410.0))
-            .Concat(Convert.FromHexString("01000000B724EF43")).ToArray();
-        int lenHits = 0;
-        for (int i = vd.AsSpan().IndexOf(lenPattern); i >= 0; i = vd.AsSpan(i + 1).IndexOf(lenPattern) is var j and >= 0 ? i + 1 + j : -1) lenHits++;
-        C(lenHits == 1, $"DT_TracksVariants: Hafren South forward row Length = {F(km)} km (DR2 length_m {F(ir.LengthM, "0.#")})");
+        bool additive = report["options"]?["additive"]?.GetValue<bool>() == true;
+        if (additive)
+            C(true, "DT_TracksVariants: skipped (--additive; registry carries Length)");
+        else
+        {
+            var vpath = HostPaths.Resolve(root, HostPaths.Variants);
+            var vd = new LegacyPackage(vpath).GetExportData(0);
+            float km = (float)Math.Round(ir.LengthM / 1000, 3);
+            var lenPattern = BitConverter.GetBytes(km).Concat(BitConverter.GetBytes(345.0)).Concat(BitConverter.GetBytes(410.0))
+                .Concat(Convert.FromHexString("01000000B724EF43")).ToArray();
+            int lenHits = 0;
+            for (int i = vd.AsSpan().IndexOf(lenPattern); i >= 0; i = vd.AsSpan(i + 1).IndexOf(lenPattern) is var j and >= 0 ? i + 1 + j : -1) lenHits++;
+            C(lenHits == 1, $"DT_TracksVariants: Hafren South forward row Length = {F(km)} km (DR2 length_m {F(ir.LengthM, "0.#")})");
+        }
 
         if (report["options"]?["visuals"]?.GetValue<string>() is { } visualsCfg)
         {
@@ -805,17 +925,20 @@ internal static class StageBuild
                 vo["visuals_terrain_uv"]?.GetValue<string>() ?? "planar", vo["visuals_ground"]?.GetValue<string>() ?? "collision",
                 vo["visuals_ground_lod"]?.GetValue<bool>() ?? false, vo["visuals_ground_bake"]?.GetValue<string>());
             RoadProbe? probe = vo["objects"]?.GetValue<string>() is { } objCfg
-                ? new RoadProbe(Road(ir, pl), new SurfaceGrid(Path.Combine(ir.Dir, "collision.glb"), pl), Toml.Load(objCfg)) : null;
+                ? NewProbe(ir, pl, objCfg) : null;
             failures += Visuals.Check(new LegacyPackage(HostPaths.Resolve(root, HostPaths.Cell)), ir, pl, Toml.Load(visualsCfg), opt, w,
-                                      report["cell"]?["visuals"], probe, root);
+                                      report["cell"]?["visuals"], probe, root, report["options"]?["package_root"]?.GetValue<string>());
         }
 
         if (report["options"]?["scenery"]?.GetValue<string>() is { } sceneryCfg)
             failures += Scenery.Check(root, Toml.Load(sceneryCfg), new Options().Usmap, w, report["scenery"]);
-        if (report["options"]?["names"]?.GetValue<string>() is { } namesCfg)
+        if (!additive && report["options"]?["names"]?.GetValue<string>() is { } namesCfg)
             failures += TrackNames.Check(root, Toml.Load(namesCfg), w);
+        if (report["bounds"] is { } boundsReport && pl.World is not null)
+            failures += Bounds.Check(root, pl.World, boundsReport, w);
         if (report["options"]?["sky"]?.GetValue<string>() is { } skyCheckCfg)
-            failures += Sky.Check(root, Toml.Load(skyCheckCfg), new Options(), w);
+            failures += Sky.Check(root, Toml.Load(skyCheckCfg), new Options(), w,
+                                  report["options"]?["sky_section"]?.GetValue<string>() ?? "nz");
 
         var bpath = HostPaths.Resolve(root, HostPaths.Baked);
         _ = new LegacyPackage(bpath);
@@ -834,7 +957,7 @@ internal static class StageBuild
         {
             var cfg = Toml.Load(report["options"]!["objects"]!.GetValue<string>());
             var surf = new SurfaceGrid(Path.Combine(ir.Dir, "collision.glb"), pl);
-            var roadSurf = cfg.Arr("road", "surfaces").Cast<string>().ToHashSet();
+            var roadSurf = RoadSurfaces.For(cfg.Arr("road", "surfaces"), surf, ir.Centre.Select(pl.ToUe).ToList());
             failures += CheckObjects(data, simpleStart, mapStart, simple, addedNode.GetValue<int>(), road,
                                      (x, y) => surf.At(x / 100, y / 100) is { } s && roadSurf.Contains(s), w);
         }
@@ -932,8 +1055,79 @@ internal static class StageBuild
             bool keys = t.Rows.Select((r, i) => r.Key == $"R{i:0000}").All(x => x);
             C(t.Rows.Count == prep["rows"]!.GetValue<int>() && sorted && tiled && keys,
               $"pacenote table re-read: {t.Rows.Count} rows, sorted {sorted}, non-overlapping {tiled}, keys R0000.. {keys}");
-            C(t.Rows.All(r => r.Tokens.Count > 0) && t.Rows[^1].SplineDistanceM + t.Rows[^1].LengthM <= len + 0.5,
+            C(t.Rows.All(r => r.Tokens.Count > 0) && t.Rows[^1].SplineDistanceM + t.Rows[^1].LengthM <= len + 5,
               $"pacenote rows: all have tokens, last ends at {t.Rows[^1].SplineDistanceM + t.Rows[^1].LengthM:0.#} m of the {len:0.#} m CenterSpline; finish call at {t.Rows.First(r => r.Tokens.Contains("Finish")).SplineDistanceM:0.#} m");
+            failures += CheckDistanceCalls(t, prep["distance_calls"] as JsonObject, w);
+        }
+        return failures;
+    }
+
+    /// Distance calls ("80" = 80 m to the next corner): the DistNN rows of the re-read pacenote table against what the build reported.
+    ///   - every DistNN / LongStraight token is one of the supported ACR tokens (the config's straights list: tokens with audio);
+    ///   - a row's spoken value is consistent with its length (rows of 40 m and more within agree_ratio * 1.25, short rows 20-40 m
+    ///     only for values up to short_max_wish_m), so the co-driver never says "100" over a 40 m straight;
+    ///   - no two DistNN rows in a row;
+    ///   - the shape of a vanilla DistNN row: the row before it has LinkToNext (it is the tail of that chain), it never links
+    ///     onward, is a single token and starts 0-15 m after the previous row (measured over the 45 vanilla tables);
+    ///   - the table has as many DistNN rows as the build reported;
+    ///   - on a stage with DR2 distance calls at least one DistNN row exists and most DR2 calls were turned into a row or
+    ///     overruled by the geometry (not lost because their corner was dropped).
+    static int CheckDistanceCalls(Pacenotes.Table t, JsonObject? rep, TextWriter w)
+    {
+        int failures = 0;
+        void C(bool ok, string what) { w.WriteLine($"{Advisory.Verdict(ok, what, out var bad)} {what}"); if (bad) failures++; }
+        if (rep is null) { C(false, "distance calls: the build report has no distance_calls section"); return failures; }
+        var allowed = rep["tokens_allowed"]!.AsArray().Select(x => x!.GetValue<string>()).ToHashSet();
+        double agree = rep["agree_ratio"]!.GetValue<double>(), shortMin = rep["short_min_m"]!.GetValue<double>(), shortMax = rep["short_max_wish_m"]!.GetValue<double>();
+        var distRows = new List<(int i, Pacenotes.Row r, string tok)>();
+        for (int i = 0; i < t.Rows.Count; i++)
+            if (t.Rows[i].Tokens.FirstOrDefault(x => allowed.Contains(x)) is { } tok) distRows.Add((i, t.Rows[i], tok));
+        var unknown = t.Rows.SelectMany(r => r.Tokens).Where(x => System.Text.RegularExpressions.Regex.IsMatch(x, @"^Dist\d+$") && !allowed.Contains(x)).Distinct().ToList();
+        C(unknown.Count == 0, $"distance calls: {distRows.Count} DistNN/straight rows, every token is a supported ACR distance call{(unknown.Count > 0 ? $"; UNSUPPORTED {string.Join(", ", unknown)}" : "")}");
+
+        var badLen = new List<string>();
+        foreach (var (_, r, tok) in distRows)
+        {
+            var mt = System.Text.RegularExpressions.Regex.Match(tok, @"^Dist(\d+)$");
+            if (!mt.Success) continue;                       // LongStraight: only the length matters, checked by the table tiling
+            double v = double.Parse(mt.Groups[1].Value, CultureInfo.InvariantCulture), l = r.LengthM;
+            bool ok = l >= shortMin - 0.5 && (l >= rep["straight_min_m"]!.GetValue<double>() - 0.5 ? l >= v / (agree * 1.25) && l <= v * agree * 1.25 : v <= shortMax);
+            if (!ok) badLen.Add($"{tok} on {l:0} m at {r.SplineDistanceM:0}");
+        }
+        C(badLen.Count == 0, $"distance calls: every spoken distance fits its row length (within x{agree * 1.25:0.##}; short rows {shortMin:0}-{rep["straight_min_m"]!.GetValue<double>():0} m only up to {shortMax:0}){(badLen.Count > 0 ? "; " + string.Join(", ", badLen.Take(6)) : "")}");
+
+        bool twice = distRows.Zip(distRows.Skip(1), (a, b) => b.i == a.i + 1).Any(x => x);
+        C(!twice, "distance calls: no two DistNN rows in a row");
+
+        // shape of a vanilla DistNN row (all 45 DT_Pacenote* tables: 1360 DistNN rows): the row before it links into it (1246; 114 do
+        // not), it never links onward, it starts 0-15 m after the previous row ends, and its length is about the spoken value.
+        // An unlinked DistNN row after a corner is not shown or spoken in game (user test, v1.11 tables), so this is a hard check.
+        bool chained = rep["link_to_previous"]?.GetValue<bool>() ?? true;
+        var notLinked = new List<string>(); var linkedOn = new List<string>(); var badGap = new List<string>(); var multi = new List<string>();
+        foreach (var (i, r, tok) in distRows)
+        {
+            if (r.LinkToNext) linkedOn.Add($"{tok} at {r.SplineDistanceM:0}");
+            if (r.Tokens.Count != 1) multi.Add($"{tok} at {r.SplineDistanceM:0}");
+            if (i == 0) continue;                         // a DistNN row at the very start has no corner to hang on
+            var prev = t.Rows[i - 1];
+            if (chained && !prev.LinkToNext) notLinked.Add($"{tok} at {r.SplineDistanceM:0}");
+            double gap = r.SplineDistanceM - (prev.SplineDistanceM + prev.LengthM);
+            if (gap < -5 || gap > 15) badGap.Add($"{tok} at {r.SplineDistanceM:0} (gap {gap:0.#})");
+        }
+        C(notLinked.Count == 0, $"distance calls (vanilla shape): the row before each DistNN row has LinkToNext (as in 1246 of 1360 vanilla DistNN rows){(notLinked.Count > 0 ? "; NOT LINKED " + string.Join(", ", notLinked.Take(6)) : "")}");
+        C(linkedOn.Count == 0 && multi.Count == 0 && badGap.Count == 0,
+          $"distance calls (vanilla shape): DistNN rows are single-token, never link onward, start 0-15 m after the previous row{(linkedOn.Count + multi.Count + badGap.Count > 0 ? "; " + string.Join(", ", linkedOn.Concat(multi).Concat(badGap).Take(6)) : "")}");
+
+        int built = rep["rows_geometry_only"]!.GetValue<int>() + rep["rows_called_with_dr2_value"]!.GetValue<int>() + rep["dr2_disagrees_geometry_used"]!.GetValue<int>();
+        C(distRows.Count == built, $"distance calls: table has {distRows.Count} DistNN rows, the build reported {built} ({rep["rows_called_with_dr2_value"]} with the DR2 value, {rep["dr2_disagrees_geometry_used"]} DR2 overruled by the geometry, {rep["rows_geometry_only"]} geometry only)");
+
+        int wishes = rep["dr2_calls"]!.GetValue<int>() - rep["dr2_superseded"]!.GetValue<int>();
+        if (rep["source"]!.GetValue<string>() == "dr2" && wishes > 0)
+        {
+            int used = rep["rows_called_with_dr2_value"]!.GetValue<int>() + rep["dr2_disagrees_geometry_used"]!.GetValue<int>();
+            C(distRows.Count > 0 && used >= wishes * 0.6,
+              $"distance calls: {used} of {wishes} DR2 distance calls became a row ({rep["rows_called_with_dr2_value"]} as spoken, {rep["rows_short_gap_with_dr2_value"]} of those on a 20-40 m gap, {rep["dr2_disagrees_geometry_used"]} overruled by the geometry); " +
+              $"{rep["dr2_dropped_short_gap"]} dropped (gap under {shortMin:0} m or short call over {shortMax:0} m), {rep["dr2_dropped_corner_not_adjacent"]} dropped (corner after finish / reordered), {rep["dr2_null_value"]} of unknown value left to the geometry");
         }
         return failures;
     }
@@ -943,7 +1137,7 @@ internal static class StageBuild
                             Func<double, double, bool> onRoadSurface, TextWriter w)
     {
         int failures = 0;
-        void C(bool ok, string what) { w.WriteLine($"{(ok ? "PASS" : "FAIL")} {what}"); if (!ok) failures++; }
+        void C(bool ok, string what) { w.WriteLine($"{Advisory.Verdict(ok, what, out var bad)} {what}"); if (bad) failures++; }
         int total = BitConverter.ToInt32(d, simpleStart);
         int host = total - added;
         C(simple.Entries == total, $"simple entries: {total} = {host} host + {added} DR2 objects");

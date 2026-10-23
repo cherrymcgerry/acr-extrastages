@@ -236,7 +236,24 @@ internal static partial class StageIr
             }
         }
 
-        var groundBake = options.Bake is null ? null : await TerrainBake.Run(install, st, progress, outDir, options.Bake);
+        object? groundBake = null;
+        if (options.Bake is not null)
+        {
+            try
+            {
+                groundBake = await TerrainBake.Run(install, st, progress, outDir, options.Bake);
+            }
+            catch (Exception ex) when (ex is InvalidDataException or NotSupportedException)
+            {
+                // Australia/Sweden/Finland winter shaders etc. have no terrain_array.fx — still write stage.json.
+                Console.Error.WriteLine($"warning: ground bake skipped: {ex.Message}");
+                groundBake = new Dictionary<string, object?> { ["skipped"] = true, ["reason"] = ex.Message };
+                var bakeDir = Path.Combine(outDir, "render", "ground_bake");
+                Directory.CreateDirectory(bakeDir);
+                File.WriteAllText(Path.Combine(bakeDir, "skipped.json"),
+                    JsonSerializer.Serialize(groundBake, Json.Options));
+            }
+        }
 
         var objects = await BuildObjects(install, st, inCorridor, options, outDir, ground.Cells);
         renderTriangles += objects?.RenderTriangles ?? 0;
@@ -272,7 +289,7 @@ internal static partial class StageIr
 
         var stage = new Dictionary<string, object?>
         {
-            ["schema"] = "acr-dirt/stage-ir",
+            ["schema"] = "ACR-XS/stage-ir",
             ["version"] = SchemaVersion,
             ["id"] = id,
             ["name"] = name,

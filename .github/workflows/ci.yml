@@ -1,0 +1,106 @@
+name: CI
+
+# Builds and tests everything that needs neither the games nor a .usmap. No stage is built here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  DOTNET_NOLOGO: 1
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+
+jobs:
+  check:
+    name: content guard, build, test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Repository content guard (no game data, usmap, big blobs)
+        shell: pwsh
+        run: ./scripts/check-repo-content.ps1
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install Rust (stable)
+        run: rustup toolchain install stable --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            tools/acr-mappings
+            tools/stage-validate
+
+      - name: VERSION matches CHANGELOG.md
+        shell: pwsh
+        run: |
+          $v = (Get-Content VERSION -Raw).Trim()
+          if ((Get-Content CHANGELOG.md -Raw) -notmatch "(?m)^## \[$([regex]::Escape($v))\]") { throw "CHANGELOG.md has no '## [$v]' section" }
+
+      - name: Bootstrap third_party (pinned clones + patches)
+        shell: pwsh
+        run: ./scripts/bootstrap.ps1
+
+      # .NET (NuGetAudit is off for dr2-extract only, see scripts/build.ps1)
+      - name: Build acr-ref
+        run: dotnet build tools/acr-ref/AcrRef.csproj -c Release
+
+      - name: Build acr-additive
+        run: dotnet build tools/acr-additive/AcrAdditive.csproj -c Release
+
+      - name: Build dr2-extract
+        shell: pwsh
+        run: ./scripts/build.ps1
+
+      - name: Build launcher
+        run: dotnet build tools/launcher/AcrExtraStages.csproj -c Release
+
+      # Rust
+      - name: acr-mappings (test, build)
+        shell: pwsh
+        run: |
+          cargo test --locked --manifest-path tools/acr-mappings/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'cargo test (acr-mappings) failed' }
+          cargo build --release --locked --manifest-path tools/acr-mappings/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'cargo build (acr-mappings) failed' }
+
+      - name: stage-validate (test, build)
+        shell: pwsh
+        run: |
+          cargo test --locked --manifest-path tools/stage-validate/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'cargo test (stage-validate) failed' }
+          cargo build --release --locked --manifest-path tools/stage-validate/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'cargo build (stage-validate) failed' }
+
+  package:
+    # Packaging smoke test (everything except the long retoc build); release.yml does the full package on a tag.
+    name: package (smoke test)
+    if: github.event_name != 'pull_request'
+    needs: check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install Rust (stable)
+        run: rustup toolchain install stable --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/acr-mappings
+
+      - name: Package (-SkipHeavy: no retoc build)
+        shell: pwsh
+        run: ./scripts/package.ps1 -SkipHeavy

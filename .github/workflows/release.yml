@@ -1,0 +1,71 @@
+name: Release
+
+# Push a tag v<VERSION> (VERSION file, matching CHANGELOG.md) to build and draft a GitHub release.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  DOTNET_NOLOGO: 1
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the tag matches VERSION and CHANGELOG.md
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ("v$version" -ne $env:GITHUB_REF_NAME) { throw "tag $env:GITHUB_REF_NAME does not match VERSION $version" }
+          if ((Get-Content CHANGELOG.md -Raw) -notmatch "(?m)^## \[$([regex]::Escape($version))\]") { throw "CHANGELOG.md has no '## [$version]' section" }
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install Rust (stable)
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Repository content guard
+        shell: pwsh
+        run: ./scripts/check-repo-content.ps1
+
+      - name: Bootstrap third_party (pinned clones + patches)
+        shell: pwsh
+        run: ./scripts/bootstrap.ps1
+
+      - name: Cargo tests
+        shell: pwsh
+        run: |
+          cargo test --locked --manifest-path tools/acr-mappings/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'cargo test (acr-mappings) failed' }
+          cargo test --locked --manifest-path tools/stage-validate/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'cargo test (stage-validate) failed' }
+
+      # Publishes the launcher and the .NET tools (self-contained, single file), builds acr-mappings and retoc (pinned
+      # commit), then zips dist/ACR-Extra-Stages-<version>.zip and dist/SHA256SUMS.txt.
+      - name: Package
+        shell: pwsh
+        run: ./scripts/package.ps1
+
+      - name: Publish GitHub Release (draft)
+        uses: softprops/action-gh-release@v3
+        with:
+          name: ACR Extra Stages ${{ env.VERSION }}
+          draft: true
+          prerelease: ${{ contains(env.VERSION, '-') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/ACR-Extra-Stages-${{ env.VERSION }}.zip
+            dist/SHA256SUMS.txt

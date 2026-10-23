@@ -20,3 +20,115 @@ time_zone = 13
 year = 2025
 month = 1
 day = 20
+
+# --- Per-location sections for the additive batch (config/stages.toml: sky = "<section>") ---
+# Approximate region centres and a plausible local-summer/winter afternoon; time of day, clouds and weather stay with the game.
+# Time zone is the UTC offset in force on that date.
+
+[argentina]
+# Cordoba province (Sierras Chicas): late-summer, UTC-3
+latitude = -31.4
+longitude = -64.4
+time_zone = -3
+year = 2025
+month = 3
+day = 12
+
+[australia]
+# New South Wales south coast / Monaro: high summer, AEDT UTC+11
+latitude = -37.1
+longitude = 149.6
+time_zone = 11
+year = 2025
+month = 2
+day = 8
+
+[finland]
+# Central Finland: midsummer, EEST UTC+3
+latitude = 62.2
+longitude = 25.8
+time_zone = 3
+year = 2025
+month = 7
+day = 12
+
+[france]
+# Monte Carlo (Alpes-Maritimes, Col de Turini): rally week, CET UTC+1, winter
+latitude = 43.98
+longitude = 7.36
+time_zone = 1
+year = 2025
+month = 1
+day = 25
+
+[germany]
+# Baumholder (Rhineland-Palatinate): early autumn, CEST UTC+2
+latitude = 49.65
+longitude = 7.31
+time_zone = 2
+year = 2025
+month = 9
+day = 20
+
+[greece]
+# Argolis (Peloponnese): spring, EEST UTC+3
+latitude = 37.6
+longitude = 22.8
+time_zone = 3
+year = 2025
+month = 5
+day = 10
+
+[poland]
+# Leczna County (Lublin Voivodeship): summer, CEST UTC+2
+latitude = 51.3
+longitude = 22.9
+time_zone = 2
+year = 2025
+month = 6
+day = 14
+
+[scotland]
+# Perth and Kinross: late summer, BST UTC+1
+latitude = 56.55
+longitude = -3.6
+time_zone = 1
+year = 2025
+month = 8
+day = 23
+
+[spain]
+# Catalonia (Tarragona hinterland): autumn, CEST UTC+2
+latitude = 41.3
+longitude = 1.3
+time_zone = 2
+year = 2025
+month = 10
+day = 5
+
+[sweden]
+# Varmland: deep winter (snow stages), CET UTC+1
+latitude = 59.8
+longitude = 13.2
+time_zone = 1
+year = 2025
+month = 2
+day = 8
+
+[usa]
+# New England (Vermont / New Hampshire hills): fall foliage, EDT UTC-4
+latitude = 44.0
+longitude = -72.7
+time_zone = -4
+year = 2025
+month = 10
+day = 4
+
+[wales]
+# Powys: the host's own place and date (kept explicit so a Wales stage can be retargeted later)
+latitude = 52.28
+longitude = -3.4
+time_zone = 0
+year = 2025
+month = 11
+day = 3

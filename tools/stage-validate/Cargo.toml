@@ -9,8 +9,8 @@ publish = false
 [workspace]
 
 [dependencies]
-# Read-only ACR shared memory layouts, from the sibling acr-rewind checkout (not modified).
-acr_shm = { path = "../../../acr-rewind/crates/acr_shm" }
+# Read-only ACR shared memory layouts from the public acr-rewind repo (Cargo finds the acr_shm crate inside its workspace).
+acr_shm = { git = "https://github.com/cherrymcgerry/acr-rewind", rev = "6691f3a724b6ab8cce4d361987d8ec58c562bb70" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 ctrlc = "3"

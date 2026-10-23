@@ -32,6 +32,7 @@ internal static class Program
                 "ground-height" => TrackCommands.Height(args[1..]),
                 "pssg-info" => PssgCommands.Info(args[1..]),
                 "pssg-to-gltf" => PssgCommands.ToGltf(args[1..]),
+                "pssg-textures" => PssgCommands.Textures(args[1..]),
                 "terrain-info" => TerrainInfo.Run(args[1..]),
                 "stage-ir" => await StageIr.Run(args[1..]),
                 "stage-textures" => await StageTextures.Run(args[1..]),

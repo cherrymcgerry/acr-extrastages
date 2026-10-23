@@ -2,7 +2,7 @@
 .SYNOPSIS
   Ports one DR2 stage (from its stage IR) into ACR, editor-less, using Hafren South's forward variant
   ("Afon Bidno - Severn", variant 1/2) as the host. Produces one IoStore container
-  zz_acrdirt_<short>_P.{utoc,ucas,pak}: v1 in work\acr\dist, v2 in work\acr\dist-v2 (same container name: both
+  zz_acrxs_<short>_P.{utoc,ucas,pak}: v1 in work\acr\dist, v2 in work\acr\dist-v2 (same container name: both
   override the same host packages, so install only one of them at a time).
 
   Overridden host packages (all under /Game):
@@ -40,7 +40,7 @@
                            ([textured] in config/visuals.toml), and the sky at Hawke's Bay (-Sky) (-> work\acr\dist-v1.7)
                     v1.8 = v1.7 with DR2's own textures on the ground, road, vista and objects ([dr2_textures] in
                            config/visuals.toml: new Texture2D + MaterialInstanceConstant packages under
-                           /Game/AcrDirt/Dr2Tex, parent M_Simple) (-> work\acr\dist-v1.8)
+                           /Game/AcrXs/Dr2Tex, parent M_Simple) (-> work\acr\dist-v1.8)
                     v1.9 = v1.8 with tilted canopy cones drawn narrow (--visuals-canopies apex), box-projected DR2 terrain UVs
                            (no streaks on steep slopes) and Hafren's hidden persistent actors also AActor.bHidden (the HLOD
                            runtime re-shows components hidden only by bVisible) (-> work\acr\dist-v1.9)
@@ -195,8 +195,8 @@ if ($Respawn) { $sbArgs += @('--respawn', $Respawn) }
 Run $acrRef @sbArgs
 
 New-Item -ItemType Directory -Force $dist | Out-Null
-Remove-Item (Join-Path $dist "zz_acrdirt_$($Short)_P.*") -ErrorAction SilentlyContinue
-Run $Retoc to-zen --version UE5_6 $mod (Join-Path $dist "zz_acrdirt_$($Short)_P.utoc")
+Remove-Item (Join-Path $dist "zz_acrxs_$($Short)_P.*") -ErrorAction SilentlyContinue
+Run $Retoc to-zen --version UE5_6 $mod (Join-Path $dist "zz_acrxs_$($Short)_P.utoc")
 
 if ($Verify) {
     $check = Join-Path $work "check-$tag"
@@ -204,7 +204,7 @@ if ($Verify) {
     Remove-Item -Recurse -Force $check -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $checkPaks | Out-Null
     Copy-Item (Join-Path $paks 'global.*') $checkPaks
-    Copy-Item (Join-Path $dist "zz_acrdirt_$($Short)_P.*") $checkPaks
+    Copy-Item (Join-Path $dist "zz_acrxs_$($Short)_P.*") $checkPaks
     # 1) what the game's reader sees: CUE4Parse over the vanilla containers (hard links, read-only use) + the built one,
     #    so imports into other containers (physical materials) resolve
     $full = Join-Path $check 'full\acr\Content\Paks'
@@ -212,10 +212,10 @@ if ($Verify) {
     Get-ChildItem $paks -File | % {
         New-Item -ItemType HardLink -Path (Join-Path $full $_.Name) -Target $_.FullName | Out-Null
     }
-    Copy-Item (Join-Path $dist "zz_acrdirt_$($Short)_P.*") $full
+    Copy-Item (Join-Path $dist "zz_acrxs_$($Short)_P.*") $full
     $svArgs = @('stage-verify', '--game', (Join-Path $check 'full'), '--ir', $ir, '--out', (Join-Path $check 'verify-cue4parse.txt'))
     if ($Version -in 'v1.9', 'v1.10', 'v1.11') { $svArgs += @('--hidden-actors', '1') }
-    if ($Version -in 'v1.8', 'v1.9', 'v1.10', 'v1.11') { $svArgs += @('--dr2-root', '/Game/AcrDirt/Dr2Tex', '--previews', (Join-Path $work "v1.8-previews\$tag")) }
+    if ($Version -in 'v1.8', 'v1.9', 'v1.10', 'v1.11') { $svArgs += @('--dr2-root', '/Game/AcrXs/Dr2Tex', '--previews', (Join-Path $work "v1.8-previews\$tag")) }
     if ($Version -in 'v1.7', 'v1.8', 'v1.9', 'v1.10', 'v1.11' -and $Sky -eq 'nz') { $svArgs += @('--sky', (Join-Path $root 'config\sky.toml')) }
     Run $acrRef @svArgs
     Get-Content (Join-Path $check 'verify-cue4parse.txt')
@@ -226,4 +226,4 @@ if ($Verify) {
     Get-Content (Join-Path $check 'verify-roundtrip.txt')
 }
 
-Get-ChildItem $dist "zz_acrdirt_$($Short)_P.*" | Format-Table Name, Length
+Get-ChildItem $dist "zz_acrxs_$($Short)_P.*" | Format-Table Name, Length

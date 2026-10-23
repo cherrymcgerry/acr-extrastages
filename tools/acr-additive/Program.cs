@@ -22,6 +22,13 @@ internal static class Program
                 "registry" => Registry.Run(o),
                 "relocate" => Relocate(o),
                 "verify" => Verify.Run(o),
+                "menu-dump" => Menu.Dump(o),
+                "tpk-png" => Menu.TpkPng(o),
+                "menu-assets" => Menu.Assets(o),
+                "db-rows" => Menu.DbRows(o),
+                "menu-locations" => MenuLocations.Run(o),
+                "menu-options" => MenuOptions.Run(o),
+                "usmap-check" => UsmapCheck.Run(o),
                 _ => Fail($"unknown command '{args[0]}'"),
             };
         }
@@ -39,8 +46,15 @@ internal static class Program
           acr-additive who-imports <package name>... [--game <dir>]       packages that hard-import them (container headers)
           acr-additive dt-selftest --legacy <root>                         DB table decode/encode round trip
           acr-additive relocate --legacy <root> --out <mod> --map /Game/a=/Game/b... [--object A=B...]
-          acr-additive registry --legacy <root> --out <mod> <stage spec dir|json>...
-          acr-additive verify --vanilla <dir> --game <dir with mods> --spec <stage spec dir> [--out <report>]
+          acr-additive registry --legacy <root> --out <mod> [--ir-root <work/ir>] <stage spec dir|json>...
+          acr-additive verify --vanilla <dir> --game <dir with mods> --spec <stage spec dir> [--ir-root <work/ir>] [--out <report>]
+          acr-additive menu-assets --ir <work/ir/stage> --id <AcrXsXX> --legacy <root> --out <mod> [--art <DR2 loading tpk>] [--preview <dir>]
+          acr-additive menu-locations --legacy <root> --out <mod> --art-dir <dir> --logo-dir <dir> [--preview <dir>] <stage spec dir|json>...
+          acr-additive db-rows --table </Game/... DataTable> --out <json> [--game <dir>]
+          acr-additive menu-dump --track <DT_Tracks row> --out <dir>       menu images as PNG (docs/menu-images.md)
+          acr-additive menu-options --ir <work/ir/stage> --id <AcrXsXX> --out <dir> [--loading <tpk>...]  backdrop / tile previews
+          acr-additive tpk-png --out <dir> <tpk>...                        decode DR2 frontend textures
+          acr-additive usmap-check --usmap <file> [--game <dir>]            CUE4Parse loads the DB tables + Hafren South (tools/acr-mappings)
         """;
 
     static int Fail(string msg) { Console.Error.WriteLine(msg); Console.WriteLine(Usage); return 1; }

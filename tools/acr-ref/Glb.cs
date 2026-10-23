@@ -41,8 +41,8 @@ internal sealed class Glb
     public IEnumerable<Primitive> Primitives(bool withUv = false)
     {
         var materials = Json["materials"]?.AsArray();
-        foreach (var mesh in Json["meshes"]!.AsArray())
-            foreach (var prim in mesh!["primitives"]!.AsArray())
+        foreach (var mesh in Json["meshes"]?.AsArray() ?? [])
+            foreach (var prim in mesh?["primitives"]?.AsArray() ?? [])
             {
                 int mode = prim!["mode"]?.GetValue<int>() ?? 4;
                 if (mode != 4) throw new NotSupportedException($"primitive mode {mode}");

@@ -102,8 +102,8 @@ roads.
 
 ## D6. B1 stage port: Hafren South forward as host; neutralise rather than delete; route-relative actors
 
-First stage: `new_zealand_rally_01_route_5` → `zz_acrdirt_nz01r5_P`. Built by `acr-ref stage-build` via
-`mods/acrdirt-stage/build.ps1`; test plan in `docs/first-stage-test.md`.
+First stage: `new_zealand_rally_01_route_5` → `zz_acrxs_nz01r5_P`. Built by `acr-ref stage-build` via
+`mods/stage/build.ps1`; test plan in `docs/first-stage-test.md`.
 
 - **Host:** variant 1/2 FullForward. Overridden packages: BakedData, forward gameplay cell
   `22VG0QIP9ATUQI633K86KWPFP`, `DT_TracksVariants` and `DT_PacenoteHafrenSouthForward`. The persistent

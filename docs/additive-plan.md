@@ -4,10 +4,10 @@
 is replaced, and many ported stages can be installed at once.
 
 **Status (2026-10-11):**
-- The prototype is built and passes every offline check. It adds "ACR-DIRT TEST", a Hafren South forward clone with
+- The prototype is built and passes every offline check. It adds "ACR-XS TEST", a Hafren South forward clone with
   a menu length of 1.23 km, under Wales.
 - The in-game test is pending ([additive-test.md](additive-test.md)).
-- Tooling: `tools/acr-additive` (new tool) and `mods/acrdirt-additive/build.ps1`.
+- Tooling: `tools/acr-additive` (new tool) and `mods/additive/build.ps1`.
 - Outputs go to `work\acr\additive\`.
 
 Evidence tags: **[V]** = verified offline (CUE4Parse / byte level); **[G]** = verified in game earlier (load proof,
@@ -94,29 +94,33 @@ profile parent is read elsewhere.
 
 ```text
 Paks\~mods\
-  zz_acrdirt_registry_P.{utoc,ucas,pak}        the 4 DB tables = vanilla rows + every installed stage's rows
-  zz_acrdirt_s_<id>_P.{utoc,ucas,pak}          one per stage: /Game/AcrDirt/Stages/<Id>/... only (new paths)
+  zz_acrxs_registry_P.{utoc,ucas,pak}        the 4 DB tables = vanilla rows + every installed stage's rows
+  zz_acrxs_s_<id>_P.{utoc,ucas,pak}          one per stage: /Game/AcrXs/Stages/<Id>/... only (new paths)
 ```
 
-- **Stage spec** (`mods/acrdirt-additive/stages/<id>.json`): `Id`, `Level`, `Location` (an existing row, or a new one
+- **Stage spec** (`mods/additive/stages/<id>.json`): `Id`, `Level`, `Location` (an existing row, or a new one
   cloned from a template), `Track` (template plus name), `Variants` (row, template, name, length, optional data
-  layers), and `Clone` (package map and object renames).
+  layers), and `Clone` (package map and object renames). Generated specs of ported stages carry **no DR2 stage names**:
+  an empty `Track.Name` / variant `Name` / `StageName` is filled by `acr-additive registry` / `verify` (`--ir-root work\ir`)
+  from the `name` in `work/ir/<dr2 id>/stage.json`, which `dr2-extract stage-ir` reads from the user's own installed DR2
+  (`language/language_eng.lng`, key `lng_<location>_route_<n>`; docs/dr2-formats.md 3.6). The track card drops a trailing
+  Forward / Reverse / Sprint. `track_name` in `config/stages.toml` overrides the track card name.
 - **Registry** (`acr-additive registry`): loads the vanilla tables, appends the spec rows, and rejects key collisions
   with vanilla rows. It writes four legacy packages, which are packed into one container (50 KB).
 - **Stage container** (`acr-additive relocate`, then `retoc to-zen`): only new package paths.
-- **Build**: `pwsh -NoProfile -File mods\acrdirt-additive\build.ps1 -Verify` (about 35 s once extracted).
+- **Build**: `pwsh -NoProfile -File mods\additive\build.ps1 -Verify` (about 35 s once extracted).
   - Every input comes from the vanilla hard-link view (`mods/common/vanilla.ps1`), never `~mods`.
   - The legacy cache is re-extracted when the stamp's container list differs from the game's (a patch).
 
 **Naming**
-- Package paths: `/Game/AcrDirt/Stages/<Id>/<Id>` (level), `/Game/AcrDirt/Stages/<Id>/<Id>/_Generated_/<cell>`, and
-  `/Game/AcrDirt/Stages/<Id>/DA_<Id>BakedData`.
-- Row keys: `<Id>` for the Levels and Tracks rows, `<Id><Variant>` for variants, e.g. `AcrDirtTestFullForward`.
-  Ids are PascalCase with an `AcrDirt` prefix for real stages, e.g. `AcrDirtNz01r5`.
-- Containers: `zz_acrdirt_registry_P` and `zz_acrdirt_s_<id lowercase>_P`.
+- Package paths: `/Game/AcrXs/Stages/<Id>/<Id>` (level), `/Game/AcrXs/Stages/<Id>/<Id>/_Generated_/<cell>`, and
+  `/Game/AcrXs/Stages/<Id>/DA_<Id>BakedData`.
+- Row keys: `<Id>` for the Levels and Tracks rows, `<Id><Variant>` for variants, e.g. `AcrXsTestFullForward`.
+  Ids are PascalCase with an `AcrXs` prefix for real stages, e.g. `AcrXsNz01r5`.
+- Containers: `zz_acrxs_registry_P` and `zz_acrxs_s_<id lowercase>_P`.
 
 **Package ids**
-- Unique by construction (the path namespace `/Game/AcrDirt/`).
+- Unique by construction (the path namespace `/Game/AcrXs/`).
 - `verify` checks for each container:
   - every id equals the hash of its path;
   - ids are unique within the container;

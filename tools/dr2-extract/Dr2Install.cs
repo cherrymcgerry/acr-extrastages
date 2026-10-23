@@ -132,6 +132,12 @@ internal sealed class Dr2Install
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        // OpenWrite does not truncate; a prior partial extract must be removed or the file stays short.
+        if (File.Exists(target))
+        {
+            File.Delete(target);
+        }
+
         var transformer = new NefsTransformer(new FileSystem());
         await transformer.DetransformAsync(item.DataSource, target, 0, new NefsProgress(CancellationToken.None));
         return target;

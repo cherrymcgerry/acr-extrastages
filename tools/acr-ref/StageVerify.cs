@@ -19,7 +19,7 @@ internal static class StageVerify
 
         using var p = Program.Open(o);
         var mounted = p.MountedVfs.Select(v => v.Name).ToList();
-        C(mounted.Any(n => n.Contains("zz_acrdirt", StringComparison.OrdinalIgnoreCase)), $"container mounted ({string.Join(", ", mounted.Where(n => n.Contains("zz_acrdirt", StringComparison.OrdinalIgnoreCase)))} among {mounted.Count} containers)");
+        C(mounted.Any(n => n.Contains("zz_acrxs", StringComparison.OrdinalIgnoreCase)), $"container mounted ({string.Join(", ", mounted.Where(n => n.Contains("zz_acrxs", StringComparison.OrdinalIgnoreCase)))} among {mounted.Count} containers)");
 
         var baked = p.LoadPackage("acr/Content/Environments/WalesS4HafrenSouth/DataAssets/DA_WalesS4HafrenSouthBakedData.uasset").GetExports().First();
         var arr = baked.GetOrDefault<UScriptArray>("BakedMeshCollisionData");

@@ -95,7 +95,8 @@ internal static class Visuals
         var comp = ProcMesh.Parse(cell.GetExportData(e), e);
         if (!ProcMesh.RoundTrips(comp, out var why)) throw new InvalidDataException($"trigger mesh sections do not round trip: {why}");
 
-        var roadCodes = cfg.Arr("road", "surfaces").Cast<string>().ToHashSet();
+        var roadCodes = objects?.RoadCodes is { Count: > 0 } oc ? oc
+            : RoadSurfaces.For(cfg.Arr("road", "surfaces"), new SurfaceGrid(Path.Combine(ir.Dir, "collision.glb"), pl), ir.Centre.Select(pl.ToUe).ToList());
         Vector3 PhysToUe(double x, double y, double z) => new((float)(x * 100), (float)(z * 100), (float)(y * 100));
 
         // ground: DR2 collision triangles inside the physics bounds, per material class
@@ -212,9 +213,9 @@ internal static class Visuals
             if (rest.Idx.Count > 0)
             {
                 dr2Rep["terrain_uv"] = BoxUv(rest, (float)(cfg.Num("dr2_textures", "terrain_tile_m") * 100));
-                bakeSections.Add(("terrain:rest", rest, MatPath(dr2!.Mic("terrain", dr2.Texture(cfg.Str("dr2_textures", "terrain"))))));
+                bakeSections.Add(("terrain:rest", rest, MatPath(dr2!.Mic("terrain", dr2.Texture(dr2.TerrainTexture)))));
             }
-            dr2Rep["terrain"] = $"ground bake {manifest}: {used.Count} tile sections" + (rest.Idx.Count > 0 ? $", {rest.Idx.Count / 3} triangles over no tile on {cfg.Str("dr2_textures", "terrain")}" : "");
+            dr2Rep["terrain"] = $"ground bake {manifest}: {used.Count} tile sections" + (rest.Idx.Count > 0 ? $", {rest.Idx.Count / 3} triangles over no tile on {dr2!.TerrainTexture}" : "");
             dr2Rep["ground_bake"] = brep;
         }
         else if (opt.Dr2On("terrain"))
@@ -224,16 +225,16 @@ internal static class Visuals
             if (opt.TerrainUv == "box") dr2Rep["terrain_uv"] = BoxUv(terrain, (float)(cfg.Num("dr2_textures", "terrain_tile_m") * 100));
             else if (opt.TerrainUv == "planar") for (int i = 0; i < terrain.Uv.Count; i++) terrain.Uv[i] *= k;
             else throw new ArgumentException($"--visuals-terrain-uv must be planar or box, not {opt.TerrainUv}");
-            terrainMat = MatPath(dr2!.Mic("terrain", dr2.Texture(cfg.Str("dr2_textures", "terrain"))));
-            dr2Rep["terrain"] = $"{cfg.Str("dr2_textures", "terrain")}, tiled every {cfg.Num("dr2_textures", "terrain_tile_m")} m";
+            terrainMat = MatPath(dr2!.Mic("terrain", dr2.Texture(dr2.TerrainTexture)));
+            dr2Rep["terrain"] = $"{dr2!.TerrainTexture}, tiled every {cfg.Num("dr2_textures", "terrain_tile_m")} m";
         }
         if (opt.Dr2On("road"))
         {
             // DR2's road strip runs edge to edge across U: RoadUv's UV1 layout (0..1 across, road_uv1_along_m along)
             road.Uv = road.Uv1.ToList();
             road.Color = 0xFFFFFFFF;
-            roadMat = MatPath(dr2!.Mic("road", dr2.Texture(cfg.Str("dr2_textures", "road"))));
-            dr2Rep["road"] = $"{cfg.Str("dr2_textures", "road")} on UV0 = UV1 (0..1 edge to edge, {cfg.Num("textured", "road_uv1_along_m")} m along)";
+            roadMat = MatPath(dr2!.Mic("road", dr2.Texture(dr2.RoadTexture)));
+            dr2Rep["road"] = $"{dr2!.RoadTexture} on UV0 = UV1 (0..1 edge to edge, {cfg.Num("textured", "road_uv1_along_m")} m along)";
         }
         var mats = new List<int> { 0, terrainMat, roadMat, Mat("materials", "posts"), Mat("materials", "gates") };
         var sections = new List<ProcMesh.Section> { dummy, terrain, road, posts, gates };
@@ -361,25 +362,27 @@ internal static class Visuals
 
     /// Offline check of the rebuilt component in a built (or round-tripped) cell.
     public static int Check(LegacyPackage cell, StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, Options opt, TextWriter w,
-                            JsonNode? visualsReport = null, RoadProbe? probe = null, string? legacyRoot = null)
+                            JsonNode? visualsReport = null, RoadProbe? probe = null, string? legacyRoot = null,
+                            string? packageRootOverride = null)
     {
         int f0 = CheckBody(cell, ir, pl, cfg, opt, w, visualsReport, probe);
-        if (opt.Dr2 && legacyRoot is not null) f0 += CheckDr2(cell, cfg, opt, w, legacyRoot, visualsReport);
+        if (opt.Dr2 && legacyRoot is not null) f0 += CheckDr2(cell, cfg, opt, w, legacyRoot, visualsReport, packageRootOverride);
         return f0;
     }
 
     /// v1.8: every section's DR2 MaterialInstanceConstant and its textures are in the package root (built container,
     /// round-tripped), parse, and are what the sections expect; reverted sections use their v1.7 material.
-    static int CheckDr2(LegacyPackage cell, Toml cfg, Options opt, TextWriter w, string legacyRoot, JsonNode? visualsReport)
+    static int CheckDr2(LegacyPackage cell, Toml cfg, Options opt, TextWriter w, string legacyRoot, JsonNode? visualsReport,
+                        string? packageRootOverride = null)
     {
         int failures = 0;
-        void C(bool ok, string what) { w.WriteLine($"{(ok ? "PASS" : "FAIL")} {what}"); if (!ok) failures++; }
+        void C(bool ok, string what) { w.WriteLine($"{Advisory.Verdict(ok, what, out var bad)} {what}"); if (bad) failures++; }
         var pmcs = Enumerable.Range(0, cell.ExportCount).Where(i => cell.ExportClass(i) == "ProceduralMeshComponent").ToList();
         int e = pmcs.MaxBy(i => cell.GetExportData(i).Length);
         var c = ProcMesh.Parse(cell.GetExportData(e), e);
         int at = c.Slots[7].at, n = BitConverter.ToInt32(c.Data, at);
         var names = (visualsReport?["sections"] as JsonArray)?.Select(x => x!.GetValue<string>()).ToList() ?? [];
-        string root = cfg.Str("dr2_textures", "package_root").TrimEnd('/');
+        string root = (packageRootOverride ?? cfg.Str("dr2_textures", "package_root")).TrimEnd('/');
         string File(string pkg) => Path.Combine(legacyRoot, "acr", "Content", pkg["/Game/".Length..].Replace('/', Path.DirectorySeparatorChar) + ".uasset");
         var micPaths = new List<(string section, string path)>();
         for (int i = 0; i < n; i++)
@@ -448,7 +451,7 @@ internal static class Visuals
                          JsonNode? visualsReport, RoadProbe? probe)
     {
         int failures = 0;
-        void C(bool ok, string what) { w.WriteLine($"{(ok ? "PASS" : "FAIL")} {what}"); if (!ok) failures++; }
+        void C(bool ok, string what) { w.WriteLine($"{Advisory.Verdict(ok, what, out var bad)} {what}"); if (bad) failures++; }
         var pmcs = Enumerable.Range(0, cell.ExportCount).Where(i => cell.ExportClass(i) == "ProceduralMeshComponent").ToList();
         int e = pmcs.MaxBy(i => cell.GetExportData(i).Length);
         var c = ProcMesh.Parse(cell.GetExportData(e), e);
@@ -651,7 +654,7 @@ internal static class Visuals
         var cl = ir.Centre.Select(pl.ToUe).ToList();
         C(cl.All(q => q.X >= mn.X && q.X <= mx.X && q.Y >= mn.Y && q.Y <= mx.Y) && secs[2].Idx.Count > 0,
           $"visuals: ground mesh {ground.Count} vertices covers all {cl.Count} centreline points; road section {secs[2].Idx.Count / 3} triangles");
-        if (opt.Ground == "render") failures += CheckRenderGround(ir, pl, cfg, terrainSecs, secs[2], C);
+        if (opt.Ground == "render") CheckRenderGround(ir, pl, cfg, terrainSecs, secs[2], opt.Vista ? secs[^1] : null, C);
         return failures;
     }
 
@@ -731,15 +734,25 @@ internal static class Visuals
     /// v1.10: the drawn ground against the collision ground the car drives on. Road vertices sit road_lift_cm above it;
     /// drawn terrain vertices near the centreline match its height (the two DR2 meshes are triangulated differently, so
     /// small differences between their vertices are expected); the drawn ground has no holes near the route.
-    /// Returns 0: failures are counted by C.
-    static int CheckRenderGround(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, List<ProcMesh.Section> terrain, ProcMesh.Section road, Action<bool, string> C)
+    /// Failures are counted by C (the caller must not add a return value to its own counter: `x += f()` reads x before f runs).
+    static int CheckRenderGround(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, List<ProcMesh.Section> terrain, ProcMesh.Section road, ProcMesh.Section? vista, Action<bool, string> C)
     {
         var sg = new SurfaceGrid(Path.Combine(ir.Dir, "collision.glb"), pl);
         double lift = cfg.Num("ground", "road_lift_cm");
         var rd = road.Pos.Select(v => sg.HeightAt(v.X / 100, v.Y / 100) is { } h ? v.Z - h * 100 : double.NaN).Where(d => !double.IsNaN(d)).ToList();
-        int off = rd.Count(d => Math.Abs(d - lift) > 0.5);
+        int off = rd.Count(d => Math.Abs(d - lift) > 5);
+        if (off > rd.Count / 1000)
+        {
+            // where the road sits off the collision ground (bridges, overlapping layers): clusters on a 100 m grid
+            var offPts = road.Pos.Where(v => sg.HeightAt(v.X / 100, v.Y / 100) is { } h && Math.Abs(v.Z - h * 100 - lift) > 5).ToList();
+            foreach (var g in offPts.GroupBy(v => ((int)Math.Floor(v.X / 10000), (int)Math.Floor(v.Y / 10000))).OrderByDescending(g => g.Count()).Take(5))
+            {
+                var h0 = g.First();
+                Console.WriteLine($"  road vertices off the collision ground: {g.Count()} around ({g.Average(v => v.X) / 100:0},{g.Average(v => v.Y) / 100:0}), e.g. {(h0.Z - sg.HeightAt(h0.X / 100, h0.Y / 100)!.Value * 100) / 100:0.00} m above it");
+            }
+        }
         C(rd.Count > road.Pos.Count * 0.99 && off <= rd.Count / 1000,
-          $"visuals ground: road vertices {lift} cm above the collision ground ({rd.Count} of {road.Pos.Count} over it; {off} off by more than 0.5 cm, " +
+          $"visuals ground: road vertices {lift} cm above the collision ground ({rd.Count} of {road.Pos.Count} over it; {off} off by more than 5 cm, " +
           $"e.g. a higher layer such as a bridge)");
 
         var cl = ir.Centre.Select(pl.ToUe).Select(q => new Vector2((float)q.X, (float)q.Y)).ToList();
@@ -808,23 +821,84 @@ internal static class Visuals
         foreach (var s in terrain.Append(road))
             for (int t = 0; t + 2 < s.Idx.Count; t += 3) covered.Add(s.Pos[(int)s.Idx[t]], s.Pos[(int)s.Idx[t + 1]], s.Pos[(int)s.Idx[t + 2]]);
         double reach = cfg.Num("ground", "hole_check_m") * 100;
-        var seen = new HashSet<(int, int)>(); int samples = 0, holes = 0; var first = new List<string>();
+        var seen = new HashSet<(int, int)>(); int samples = 0, holes = 0, beyondEnds = 0; var first = new List<string>(); var holePts = new List<Vector2>();
+        // Nobody drives behind the first or past the last centreline point (DR2's route data ends at its run-up / run-out gate):
+        // the half discs there are not checked.
+        Vector2 Dir(int a, int b, int step)
+        {
+            for (int i = b; i >= 0 && i < cl.Count; i += step) if ((cl[i] - cl[a]).LengthSquared() > 100) return Vector2.Normalize(cl[i] - cl[a]);
+            return Vector2.Zero;
+        }
+        var dirStart = Dir(0, 1, 1); var dirEnd = Dir(cl.Count - 1, cl.Count - 2, -1);   // pointing along the route at the start, back along it at the end
+        // p is beyond an end point: that point is its nearest centreline point and it lies on the outer side of it
+        bool Beyond(Vector2 p, int end, Vector2 inward)
+        {
+            double d = (p - cl[end]).LengthSquared();
+            if (d > reach * reach || Vector2.Dot(p - cl[end], inward) >= 0) return false;
+            for (int i = 0; i < cl.Count; i++) if (i != end && (p - cl[i]).LengthSquared() < d) return false;
+            return true;
+        }
         for (int k = 0; k < cl.Count; k++)
             for (double dx = -reach; dx <= reach; dx += 200)
                 for (double dy = -reach; dy <= reach; dy += 200)
                 {
                     var p = cl[k] + new Vector2((float)dx, (float)dy);
-                    if (dx * dx + dy * dy > reach * reach || !seen.Add(((int)Math.Floor(p.X / 200), (int)Math.Floor(p.Y / 200)))) continue;
+                    if (dx * dx + dy * dy > reach * reach) continue;
+                    if (!seen.Add(((int)Math.Floor(p.X / 200), (int)Math.Floor(p.Y / 200)))) continue;
+                    if (Beyond(p, 0, dirStart) || Beyond(p, cl.Count - 1, dirEnd)) { beyondEnds++; continue; }
                     if (p.X < StageBuild.PhysMinX * 100 || p.X > StageBuild.PhysMaxX * 100 || p.Y < StageBuild.PhysMinZ * 100 || p.Y > StageBuild.PhysMaxZ * 100) continue;
                     samples++;
                     if (covered[new Vector3(p, 0)]) continue;
                     holes++;
+                    holePts.Add(p);
                     // drawn ground 10 cm around it: a seam between triangles rather than an opening
                     int around = new[] { new Vector2(10, 0), new Vector2(-10, 0), new Vector2(0, 10), new Vector2(0, -10) }.Count(o => drawn.At(p + o) is not null);
-                    if (first.Count < 5) first.Add($"({p.X / 100:0},{p.Y / 100:0}) {Dist(p):0} m off, drawn ground at {around} of 4 points 10 cm around");
+                    if (first.Count < 5) first.Add($"({p.X / 100:0},{p.Y / 100:0}) {(Dist(p) is var dd && dd < 1e9 ? dd.ToString("0") : "> 20")} m off, drawn ground at {around} of 4 points 10 cm around");
                 }
+        // A hole the vista ring covers is a gap in DR2's own terrain (no render terrain, no collision mesh) that DR2 shows as its
+        // distant ring too, not a void: counted separately. The vista keeps its triangles over cells the ground does not touch.
+        int vistaFilled = 0;
+        if (vista is not null && holePts.Count > 0)
+        {
+            float hx0 = holePts.Min(q => q.X) - 1, hx1 = holePts.Max(q => q.X) + 1, hy0 = holePts.Min(q => q.Y) - 1, hy1 = holePts.Max(q => q.Y) + 1;
+            var near = new List<(Vector3 a, Vector3 b, Vector3 c)>();
+            for (int t = 0; t + 2 < vista.Idx.Count; t += 3)
+            {
+                Vector3 a = vista.Pos[(int)vista.Idx[t]], b = vista.Pos[(int)vista.Idx[t + 1]], c = vista.Pos[(int)vista.Idx[t + 2]];
+                if (Math.Max(a.X, Math.Max(b.X, c.X)) < hx0 || Math.Min(a.X, Math.Min(b.X, c.X)) > hx1 ||
+                    Math.Max(a.Y, Math.Max(b.Y, c.Y)) < hy0 || Math.Min(a.Y, Math.Min(b.Y, c.Y)) > hy1) continue;
+                near.Add((a, b, c));
+            }
+            var remaining = new List<Vector2>();
+            foreach (var p in holePts)
+            {
+                bool inside = false;
+                foreach (var (a, b, c) in near)
+                {
+                    double d = (b.X - a.X) * (c.Y - a.Y) - (c.X - a.X) * (b.Y - a.Y);
+                    if (Math.Abs(d) < 1e-6) continue;
+                    double l1 = ((p.X - a.X) * (c.Y - a.Y) - (c.X - a.X) * (p.Y - a.Y)) / d, l2 = ((b.X - a.X) * (p.Y - a.Y) - (p.X - a.X) * (b.Y - a.Y)) / d;
+                    if (l1 >= -1e-9 && l2 >= -1e-9 && l1 + l2 <= 1 + 1e-9) { inside = true; break; }
+                }
+                if (inside) vistaFilled++; else remaining.Add(p);
+            }
+            holes -= vistaFilled; holePts = remaining;
+            if (vistaFilled > 0) Console.WriteLine($"  ground holes: {vistaFilled} of {vistaFilled + remaining.Count} are covered by the vista ring ({near.Count} vista triangles near them)");
+        }
+        if (holePts.Count > 0)
+            Console.WriteLine("  ground holes by collision surface under them: " + string.Join(", ",
+                holePts.GroupBy(q => sg.At(q.X / 100, q.Y / 100) ?? "none").OrderByDescending(g => g.Count()).Select(g => $"{g.Key} x{g.Count()}")));
+        // where the holes are: clusters on a 50 m grid, with the route position of the nearest centreline point
+        foreach (var g in holePts.GroupBy(q => ((int)Math.Floor(q.X / 5000), (int)Math.Floor(q.Y / 5000))).OrderByDescending(g => g.Count()).Take(6))
+        {
+            var mid = new Vector2(g.Average(q => q.X), g.Average(q => q.Y));
+            int ni = Enumerable.Range(0, cl.Count).MinBy(i => (cl[i] - mid).LengthSquared());
+            Console.WriteLine($"  ground hole cluster: {g.Count()} samples around ({mid.X / 100:0},{mid.Y / 100:0}), {Where(mid)}, {Math.Sqrt((cl[ni] - mid).LengthSquared()) / 100:0} m from the centreline, route height there {pl.ToUe(ir.Centre[ni]).Z / 100:0.0} m");
+        }
         C(holes <= samples / 1000,
           $"visuals ground: {samples} plan samples every 2 m within {reach / 100:0} m of the centreline (inside the physics bounds): {holes} over no drawn ground" +
+          (vistaFilled > 0 ? $" (+ {vistaFilled} over a gap in DR2's terrain that the vista ring covers)" : "") +
+          (beyondEnds > 0 ? $" ({beyondEnds} samples beyond the first/last centreline point not checked)" : "") +
           (holes > 0 ? $" ({string.Join(", ", first)})" : ""));
         return 0;
     }
@@ -1006,8 +1080,23 @@ internal static class Visuals
         for (int i = 0; i < vista.Nrm.Count; i++) vista.Nrm[i] = vista.Nrm[i] == Vector3.Zero ? Vector3.UnitZ : Vector3.Normalize(vista.Nrm[i]);
 
         var cl = ir.Centre.Select(pl.ToUe).Select(q => new Vector2((float)q.X, (float)q.Y)).ToArray();
-        double nearest = double.MaxValue;
-        foreach (var v in vista.Pos) foreach (var q in cl) nearest = Math.Min(nearest, (new Vector2(v.X, v.Y) - q).LengthSquared());
+        // Vista vertices inside the physics bounds over no drawn ground fill a gap in DR2's own terrain (e.g. beside the run-up
+        // of Waimarama Sprint, where terrain.glb and the collision mesh have nothing): they are not "too close to the road"
+        // and the ground check verifies that they cover the gap. The distance minimum applies to every other vertex.
+        var drawn = new PlanMask(100);
+        foreach (var s in groundSecs)
+            for (int t = 0; t + 2 < s.Idx.Count; t += 3) drawn.Add(s.Pos[(int)s.Idx[t]], s.Pos[(int)s.Idx[t + 1]], s.Pos[(int)s.Idx[t + 2]]);
+        bool InBounds(Vector3 v) => v.X >= StageBuild.PhysMinX * 100 && v.X <= StageBuild.PhysMaxX * 100 && v.Y >= StageBuild.PhysMinZ * 100 && v.Y <= StageBuild.PhysMaxZ * 100;
+        double nearest = double.MaxValue, nearestGap = double.MaxValue; Vector3 nearGapV = default; int gapVerts = 0;
+        foreach (var v in vista.Pos)
+        {
+            double best = double.MaxValue;
+            foreach (var q in cl) best = Math.Min(best, (new Vector2(v.X, v.Y) - q).LengthSquared());
+            if (InBounds(v) && !drawn[v]) { gapVerts++; if (best < nearestGap) { nearestGap = best; nearGapV = v; } }
+            else nearest = Math.Min(nearest, best);
+        }
+        if (gapVerts > 0)
+            Console.WriteLine($"visuals: vista: {gapVerts} vertices inside the physics bounds over no drawn ground (a gap in DR2's terrain), nearest {Math.Sqrt(nearestGap) / 100:0.0} m from the centreline at UE ({nearGapV.X / 100:0},{nearGapV.Y / 100:0}); not counted for the distance minimum");
         var (mn, mx) = ProcMesh.Bounds(vista.Pos);
         var r = new JsonObject
         {
@@ -1015,6 +1104,8 @@ internal static class Visuals
             ["triangles"] = vista.Idx.Count / 3,
             ["dropped_under_ground"] = dropped,
             ["nearest_to_centreline_m"] = Math.Round(Math.Sqrt(nearest) / 100, 1),
+            ["gap_vertices"] = gapVerts,
+            ["nearest_gap_vertex_m"] = gapVerts > 0 ? Math.Round(Math.Sqrt(nearestGap) / 100, 1) : null,
             ["bounds_m"] = $"({mn.X / 100:0},{mn.Y / 100:0},{mn.Z / 100:0})..({mx.X / 100:0},{mx.Y / 100:0},{mx.Z / 100:0})",
         };
         Console.WriteLine($"visuals: vista {r["triangles"]} of {source} triangles ({dropped} under the drawn ground dropped), " +

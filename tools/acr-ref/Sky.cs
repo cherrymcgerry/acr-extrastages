@@ -80,7 +80,8 @@ internal static class Sky
     }
 
     /// Rewrites the sky actor of the persistent level at `src` (the scenery output if present) into outRoot.
-    public static JsonObject Build(string legacy, string outRoot, Toml cfg, Options o)
+    /// `section` is the TOML section for the target location (default "nz").
+    public static JsonObject Build(string legacy, string outRoot, Toml cfg, Options o, string section = "nz")
     {
         Dictionary<string, int> layout;
         using (var p = Program.Open(o)) layout = Layout(p);
@@ -90,7 +91,7 @@ internal static class Sky
         int e = Actor(pkg);
         var d = pkg.GetExportData(e);
         var host = Values(cfg, "host");
-        var want = Values(cfg, "nz");
+        var want = Values(cfg, section);
         var (slots, valuesAt, runAt) = Locate(d, layout, host);
         int runLen = Run(host).Length;
         var targets = Fields.Select(f => layout[f]).ToHashSet();
@@ -109,23 +110,23 @@ internal static class Sky
                 if (File.Exists(Path.ChangeExtension(src, ext))) File.Copy(Path.ChangeExtension(src, ext), Path.ChangeExtension(dest, ext), true);
         }
         pkg.SaveTo(dest);
-        var r = new JsonObject { ["actor"] = pkg.ExportName(e), ["slots"] = $"{layout["Latitude"]}..{layout["Day"]}" };
+        var r = new JsonObject { ["actor"] = pkg.ExportName(e), ["section"] = section, ["slots"] = $"{layout["Latitude"]}..{layout["Day"]}" };
         foreach (var ((f, hv), (_, nv)) in host.Zip(want)) r[f] = $"{hv} -> {nv}";
-        Console.WriteLine($"sky: {pkg.ExportName(e)}: {string.Join(", ", host.Zip(want).Select(x => $"{x.First.f} {x.First.v} -> {x.Second.v}"))}");
+        Console.WriteLine($"sky [{section}]: {pkg.ExportName(e)}: {string.Join(", ", host.Zip(want).Select(x => $"{x.First.f} {x.First.v} -> {x.Second.v}"))}");
         return r;
     }
 
-    public static int Check(string root, Toml cfg, Options o, TextWriter w)
+    public static int Check(string root, Toml cfg, Options o, TextWriter w, string section = "nz")
     {
         Dictionary<string, int> layout;
         using (var p = Program.Open(o)) layout = Layout(p);
         var pkg = new LegacyPackage(HostPaths.Resolve(root, Scenery.Persistent));
-        var want = Values(cfg, "nz");
+        var want = Values(cfg, section);
         string what = string.Join(", ", want.Select(x => $"{x.f} {x.v}"));
         try
         {
             Locate(pkg.GetExportData(Actor(pkg)), layout, want);
-            w.WriteLine($"PASS sky: placed sky actor at {what} (slots {layout["Latitude"]}..{layout["Day"]}, one byte run)");
+            w.WriteLine($"PASS sky [{section}]: placed sky actor at {what} (slots {layout["Latitude"]}..{layout["Day"]}, one byte run)");
             return 0;
         }
         catch (InvalidDataException ex)

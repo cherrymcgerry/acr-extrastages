@@ -1,4 +1,6 @@
+using EgoEngineLibrary.Graphics;
 using EgoEngineLibrary.Graphics.Pssg;
+using EgoEngineLibrary.Graphics.Pssg.Elements;
 
 namespace Dr2Extract;
 
@@ -36,6 +38,31 @@ internal static class PssgCommands
     }
 
     public static int ToGltf(string[] args) => PssgMeshExport.Run(args);
+
+    /// <c>pssg-textures &lt;file.pssg&gt; &lt;out-dir&gt; [--filter &lt;regex on id&gt;]</c>: every TEXTURE as PNG (mip 0).
+    public static int Textures(string[] args)
+    {
+        var pos = Program.Positional(args);
+        var pssg = Open(pos[0]);
+        var filter = new System.Text.RegularExpressions.Regex(Program.Option(args, "--filter") ?? ".");
+        Directory.CreateDirectory(pos[1]);
+        var ids = new List<string>();
+        Collect(pssg.RootElement, ids);
+        foreach (var id in ids.Where(i => filter.IsMatch(i)).Order())
+        {
+            var t = pssg.TryGetObject<PssgTexture>(id.AsMemory())!;
+            var png = Path.Combine(pos[1], id + ".png");
+            TextureCommands.DdsToPng(t.ToDdsFile(), png);
+            Console.WriteLine($"{id}: {t.TexelFormat} {t.Width}x{t.Height}");
+        }
+        return 0;
+    }
+
+    private static void Collect(PssgElement element, List<string> ids)
+    {
+        if (element.Name == "TEXTURE" && element.Attributes.FirstOrDefault(a => a.Name == "id") is { } id) ids.Add(id.DisplayValue);
+        foreach (var child in element.ChildElements) Collect(child, ids);
+    }
 
     internal static PssgFile Open(string path)
     {

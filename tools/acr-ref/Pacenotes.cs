@@ -159,6 +159,14 @@ internal static class Pacenotes
         int diff = Enumerable.Range(0, Math.Min(rt.Length, orig.Length)).FirstOrDefault(i => rt[i] != orig[i], -1);
         Console.WriteLine($"{table.Rows.Count} rows; writer round trip {(rt.AsSpan().SequenceEqual(orig) ? "byte-identical" : $"DIFFERS at {diff} of {orig.Length} (written {rt.Length}): orig {Convert.ToHexString(orig, Math.Max(0, diff - 8), Math.Min(32, orig.Length - Math.Max(0, diff - 8)))} new {Convert.ToHexString(rt, Math.Max(0, diff - 8), Math.Min(32, rt.Length - Math.Max(0, diff - 8)))}")}");
         var cell = new LegacyPackage(HostPaths.Resolve(root, HostPaths.Cell));
+        if (o.Named.ContainsKey("fields"))
+        {
+            // every field of every row: the comparison with a generated table (distance-call shape check)
+            Console.WriteLine($"prefix {table.Prefix.Length} bytes: {Convert.ToHexString(table.Prefix)}");
+            foreach (var r in table.Rows)
+                Console.WriteLine($"{r.Key,-8} s={r.SplineDistanceM,9:0.###} L={r.LengthM,8:0.###} link={(r.LinkToNext ? 1 : 0)} desc='{r.Description}' loc=({string.Join(',', r.SavedLocation.Select(v => v.ToString("0.#")))}) tokens=[{string.Join(' ', r.Tokens)}]");
+            return 0;
+        }
         if (o.Named.ContainsKey("locations"))
         {
             // each row's SavedLocation projected onto each spline: UE arc length (reparam table) vs SplineDistanceM
@@ -431,6 +439,8 @@ internal static class Pacenotes
         public int Call;              // DR2 call (one recorded phrase): rows of the same call are linked
         public int Subcall, Angle, Want;
         public double Read;           // DR2 read point on the spline
+        public Placed? PrevInSeq;     // previous corner in DR2 order (null: first corner of the stage)
+        public double? WishBefore;    // DR2 spoken distance (m, >= min_dr2_m) between PrevInSeq and this corner
     }
 
     /// v1.4: each corner call takes the first not yet used geometric corner of its direction starting within
@@ -517,6 +527,14 @@ internal static class Pacenotes
         int localised = 0, fallback = 0, dirAgree = 0, cornerTokens = 0, mappedTokens = 0, droppedAfterFinish = 0;
         string? pendingConj = null;
         double finishRead = double.NaN;
+
+        // DR2 spoken distances (>= min_dr2_m) become "wishes" on the gap between the corner before and the corner after them
+        // in DR2 order; the straight row for that gap is then called with the snapped DR2 value (see the tiling below)
+        bool dr2Dist = m["distance_calls"].TryGetValue("source", out var srcv) && srcv is "dr2";
+        double minDr2 = m["distance_calls"].TryGetValue("min_dr2_m", out var mdv) && mdv is double mdd ? mdd : 40;
+        double? pendingGap = null, trailingWish = null;
+        Placed? lastSeq = null;
+        int dr2DistCalls = 0, dr2DistSuperseded = 0, distNull = 0;
         foreach (var t in tokens)
         {
             double read = toSpline(t.GateDistance);
@@ -529,8 +547,9 @@ internal static class Pacenotes
                     var sev = t.Severity is null ? null : Map("severity", t.Severity);
                     if (dir is null || sev is null) { Unmapped($"corner {t.Direction} {t.Severity}"); break; }
                     var p = new Placed { Tokens = { sev.Replace("{Dir}", dir) }, Conj = pendingConj, Call = t.Call, Subcall = t.Subcall,
-                                         Angle = t.Angle, Read = read, Want = t.Direction == "right" ? 1 : -1 };
-                    pendingConj = null;
+                                         Angle = t.Angle, Read = read, Want = t.Direction == "right" ? 1 : -1,
+                                         PrevInSeq = lastSeq, WishBefore = pendingGap };
+                    pendingConj = null; pendingGap = null; lastSeq = p;
                     foreach (var mod in t.Modifiers)
                         if (Map("modifiers", mod) is { } mt) p.Tokens.Add(mt); else Unmapped($"modifier {mod}");
                     placed.Add(p);
@@ -541,11 +560,22 @@ internal static class Pacenotes
                 {
                     var key = t.DistanceCall is { } dc ? dc.ToString(CultureInfo.InvariantCulture) : "null";
                     if (Map("distance", key) is { } conj) { pendingConj = conj; mappedTokens++; }
+                    else if (dr2Dist && t.DistanceCall is { } dc2 && dc2 >= minDr2)
+                    {
+                        dr2DistCalls++;
+                        if (pendingGap is not null) dr2DistSuperseded++;
+                        pendingGap = dc2; mappedTokens++;
+                    }
+                    else if (dr2Dist && t.DistanceCall is null)
+                    {
+                        // distance call of unknown value (unverified distanceLink code): the straight's length decides
+                        distNull++; mappedTokens++;
+                    }
                     else Unmapped($"distance {key}");
                     break;
                 }
                 case "finish":
-                    if (Map("finish", "finish") is not null) { finishRead = read; mappedTokens++; } else Unmapped("finish");
+                    if (Map("finish", "finish") is not null) { finishRead = read; mappedTokens++; trailingWish = pendingGap; pendingGap = null; } else Unmapped("finish");
                     break;
                 default:
                     Unmapped($"kind {t.Kind}");
@@ -600,7 +630,36 @@ internal static class Pacenotes
         var dTok = m.Arr("layout", "straights").Cast<string>().ToArray();
         var dVal = m.Arr("layout", "straight_values_m").Cast<double>().ToArray();
         string longTok = m.Str("layout", "long_straight"); double longM = m.Num("layout", "long_straight_m");
-        string StraightToken(double gap) => gap >= longM ? longTok : dTok[Array.FindLastIndex(dVal, v => v <= gap)];
+        // straight_snap: "nearest" (the host's DistNN rows are the spoken distance rounded to the nearest call: its 58 m gap is
+        // Dist60, 54 m Dist50, 66 m Dist70) or "floor" (largest token not above the gap, v1.5 behaviour)
+        bool snapNearest = !(m["layout"].TryGetValue("straight_snap", out var snv) && snv is "floor");
+        int SnapIndex(double metres)
+        {
+            if (!snapNearest) return Math.Max(0, Array.FindLastIndex(dVal, v => v <= metres));
+            int best = 0;
+            for (int k = 1; k < dVal.Length; k++) if (Math.Abs(dVal[k] - metres) < Math.Abs(dVal[best] - metres)) best = k;
+            return best;
+        }
+        string StraightToken(double gap) => gap >= longM ? longTok : dTok[SnapIndex(gap)];
+
+        // DR2 distance calls: the straight between two corners is called with the snapped DR2 value when the geometric gap agrees
+        // (within agree_ratio); gaps of short_min_m..straight_min_m are called too when DR2 spoke a short distance
+        // (<= short_max_wish_m), like the host's 25-40 m DistNN rows; otherwise the geometry decides
+        double agree = m["distance_calls"].TryGetValue("agree_ratio", out var arv) && arv is double ard ? ard : 1.5;
+        double shortMin = m["distance_calls"].TryGetValue("short_min_m", out var smv) && smv is double smd ? smd : 20;
+        double shortMaxWish = m["distance_calls"].TryGetValue("short_max_wish_m", out var swv) && swv is double swd ? swd : 60;
+        bool chainDist = !(m["distance_calls"].TryGetValue("link_to_previous", out var ltp) && ltp is false);
+        int dr2Emitted = 0, dr2Disagree = 0, dr2Short = 0, dr2ShortSkipped = 0, dr2Unplaced = 0, geoRows = 0;
+        var distDetail = new List<string>();
+        (string? tok, string how) DistanceToken(double gap, double? wish)
+        {
+            string? geo = gap >= minStraight ? StraightToken(gap) : null;
+            if (wish is not { } w) return (geo, "geometry");
+            string snapped = w >= longM ? longTok : dTok[SnapIndex(w)];
+            if (gap >= minStraight) return gap >= w / agree && gap <= w * agree ? (snapped, "dr2") : (geo, "geometry; dr2 disagrees");
+            if (gap >= shortMin && w <= shortMaxWish) return (snapped, "dr2 short");
+            return (null, "dr2 call dropped: gap too short");
+        }
 
         var rows = new List<Row>();
         void Add(double s, double e, IEnumerable<string> toks, bool link = false) =>
@@ -613,22 +672,54 @@ internal static class Pacenotes
         droppedAfterFinish += beforeFinish - placed.Count;
         if (placed.Count > 0 && placed[^1].End > finishStart) placed[^1].End = finishStart;
 
+        if (pendingGap is not null && trailingWish is null) trailingWish = pendingGap;
         double cursor = startS;
         int straights = 0, links = 0;
+        void Straight(double from, double to, double? wish, bool link, string where)
+        {
+            var (tok, how) = DistanceToken(to - from, wish);
+            if (wish is not null)
+            {
+                if (how == "dr2") dr2Emitted++;
+                else if (how == "dr2 short") { dr2Emitted++; dr2Short++; }
+                else if (how.StartsWith("geometry")) dr2Disagree++;
+                else dr2ShortSkipped++;
+            }
+            else if (tok is not null) geoRows++;
+            if (wish is not null || tok is not null)
+                distDetail.Add($"{where} {from - startS:0}-{to - startS:0} m (gap {to - from:0}): DR2 {(wish is { } wv ? wv.ToString("0") : "-")} -> {tok ?? "no row"} ({how})");
+            if (tok is null) return;
+            // The host's encoding (45 vanilla tables, 1360 DistNN rows): a distance is the tail of the corner row before it, i.e.
+            // that row has LinkToNext = true (1246 of 1360; the other 114 are unlinked leftovers) and the DistNN row itself never
+            // links onward. An unlinked DistNN row after a corner is neither shown nor spoken in game (the v1.5-v1.11 tables).
+            if (rows.Count > 0 && chainDist) rows[^1].LinkToNext = true;
+            Add(from, to, [tok], false); straights++;
+        }
         for (int i = 0; i < placed.Count; i++)
         {
             var p = placed[i];
             double gap = p.Start - cursor;
             bool linked = i > 0 && placed[i - 1].Call == p.Call;
-            if (linked) { rows[^1].LinkToNext = true; links++; }
-            else if (gap >= minStraight) { Add(cursor, p.Start, [StraightToken(gap)]); straights++; }
+            double? wish = i == 0 ? (p.PrevInSeq is null ? p.WishBefore : null) : (ReferenceEquals(p.PrevInSeq, placed[i - 1]) ? p.WishBefore : null);
+            bool spoken = false;   // a DR2 distance call inside one phrase: "Left 3 ... 100 Right 2"
+            if (linked)
+            {
+                if (wish is { } lw && DistanceToken(gap, lw).tok is not null)
+                {
+                    rows[^1].LinkToNext = true; links++;
+                    Straight(cursor, p.Start, lw, false, $"call {p.Call}");
+                    spoken = true;
+                }
+                else { rows[^1].LinkToNext = true; links++; if (wish is not null) Straight(cursor, p.Start, wish, false, $"call {p.Call}"); }
+            }
+            else Straight(cursor, p.Start, wish, false, $"call {p.Call}");
             var toks = new List<string>();
-            if (linked) toks.Add(p.Conj ?? (gap < intoMax ? m.Str("layout", "into") : m.Str("layout", "and")));
+            if (linked && !spoken) toks.Add(p.Conj ?? (gap < intoMax ? m.Str("layout", "into") : m.Str("layout", "and")));
             toks.AddRange(p.Tokens);
             Add(p.Start, p.End, toks);
             cursor = p.End;
         }
-        if (finishStart - cursor >= minStraight) { Add(cursor, finishStart, [StraightToken(finishStart - cursor)]); straights++; }
+        Straight(cursor, finishStart, placed.Count > 0 && ReferenceEquals(lastSeq, placed[^1]) ? trailingWish : (placed.Count == 0 ? trailingWish : null), false, "finish");
         Add(Math.Max(cursor, finishStart), finishS, [Map("finish", "finish") ?? "Finish"]);
         var after = m.Arr("layout", "after_finish").Cast<string>().ToArray();
         double stopAt = Math.Max(finishS + 1, stopS - m.Num("layout", "stop_ahead_m"));
@@ -645,6 +736,25 @@ internal static class Pacenotes
         report["corners_direction_agrees_with_geometry"] = dirAgree;
         report["corners_dropped_after_finish"] = droppedAfterFinish;
         report["straight_rows"] = straights;
+        dr2Unplaced = dr2DistCalls - dr2DistSuperseded - dr2Emitted - dr2Disagree - dr2ShortSkipped;   // corner dropped / not adjacent after sorting
+        report["distance_calls"] = new System.Text.Json.Nodes.JsonObject
+        {
+            ["agree_ratio"] = agree, ["short_min_m"] = shortMin, ["short_max_wish_m"] = shortMaxWish, ["straight_min_m"] = minStraight,
+            ["source"] = dr2Dist ? "dr2" : "geometry",
+            ["dr2_calls"] = dr2DistCalls,                       // DR2 distance tokens >= min_dr2_m
+            ["dr2_superseded"] = dr2DistSuperseded,             // a second distance token before the same corner: the later one wins
+            ["dr2_null_value"] = distNull,                      // distance tokens with an unverified value code: geometry decides
+            ["rows_called_with_dr2_value"] = dr2Emitted,
+            ["rows_short_gap_with_dr2_value"] = dr2Short,
+            ["dr2_disagrees_geometry_used"] = dr2Disagree,
+            ["dr2_dropped_short_gap"] = dr2ShortSkipped,
+            ["dr2_dropped_corner_not_adjacent"] = dr2Unplaced,
+            ["rows_geometry_only"] = geoRows,
+            ["tokens_allowed"] = new System.Text.Json.Nodes.JsonArray(dTok.Append(longTok).Select(x => (System.Text.Json.Nodes.JsonNode?)x).ToArray()),
+            ["snap"] = snapNearest ? "nearest" : "floor",
+            ["link_to_previous"] = chainDist,
+            ["detail"] = new System.Text.Json.Nodes.JsonArray(distDetail.Select(x => (System.Text.Json.Nodes.JsonNode?)x).ToArray()),
+        };
         report["linked_rows"] = links;
         report["dr2_finish_call_read_m"] = double.IsNaN(finishRead) ? null : Math.Round(finishRead, 1);
         report["unmapped"] = new System.Text.Json.Nodes.JsonObject(unmapped.Select(kv => KeyValuePair.Create(kv.Key, (System.Text.Json.Nodes.JsonNode?)kv.Value)));

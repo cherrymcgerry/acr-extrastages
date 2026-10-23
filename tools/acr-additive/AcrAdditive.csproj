@@ -14,8 +14,10 @@
   <ItemGroup>
     <Compile Include="..\acr-ref\LegacyPackage.cs" Link="Shared\LegacyPackage.cs" />
     <Compile Include="..\acr-ref\Unv.cs" Link="Shared\Unv.cs" />
+    <Compile Include="..\acr-ref\Dds.cs" Link="Shared\Dds.cs" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="BCnEncoder.Net" Version="2.2.1" />
     <PackageReference Include="CUE4Parse" Version="1.2.2.202610" />
     <PackageReference Include="Microsoft.Bcl.Memory" Version="10.0.12" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />

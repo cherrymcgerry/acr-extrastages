@@ -1,0 +1,32 @@
+[package]
+name = "acr-mappings"
+description = "Writes a CUE4Parse .usmap for the installed Assetto Corsa Rally build by reading its UE reflection data externally (read-only)"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone workspace: not part of any other Cargo workspace in this repo.
+[workspace]
+
+[dependencies]
+# Signature scanning, engine-global resolution and GObjects/FNamePool walking from acr-rewind.
+# Pinned to a commit; for a local checkout see README.md ("Local acr-rewind checkout").
+acr_ue = { git = "https://github.com/cherrymcgerry/acr-rewind.git", rev = "6691f3a724b6ab8cce4d361987d8ec58c562bb70" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zstd = { version = "0.13", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_Memory",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+] }
+
+[profile.release]
+debug = 1

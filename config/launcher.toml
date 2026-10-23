@@ -1,0 +1,6 @@
+# AcrExtraStages.exe defaults (tools/launcher).
+# Free disk space the preflight asks for on the working drive, in GB: free_gb_base + free_gb_per_stage x selected stages,
+# capped at free_gb_full_set. Conservative estimates until the disk-budget work measures the real peak (plan section 5).
+free_gb_base = 10
+free_gb_per_stage = 1.5
+free_gb_full_set = 35

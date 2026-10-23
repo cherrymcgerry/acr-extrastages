@@ -58,6 +58,8 @@ internal static class Program
                 "terrain-compare" => TerrainCompare.Run(opts),
                 "legacy-export-diff" => TerrainCompare.ExportDiff(opts),
                 "ground-lod-test" => TerrainCompare.LodTest(opts),
+                "bounds-probe" => Bounds.Probe(opts),
+                "stage-fit" => StageFit.Run(opts),
                 _ => Fail($"unknown command '{args[0]}'"),
             };
         }
@@ -86,8 +88,10 @@ internal static class Program
                               [--width 5 --length 8 --rise 1 --sink 0.05] --out <dir>
                               appends an always-active ramp collider (physics space: metres, Y up)
 
-        DR2 stage port (host: Hafren South forward; see docs/decisions.md D6, mods/acrdirt-stage/build.ps1):
+        DR2 stage port (host: Hafren South forward; see docs/decisions.md D6, mods/stage/build.ps1):
           acr-ref stage-build    --ir <work/ir/stage> --legacy <retoc legacy root> --out <mod root> [--report f.json] [--keep-pacenotes 1]
+          acr-ref stage-fit      [--ir-root work/ir] [--out work/acr/fit-report.json] [--margin 400] [--max-length 9000] [--filter <regex>]
+                                 read-only: placement + physics world box per stage (stage-build --bounds 1), long/tall stages flagged
           acr-ref stage-check    --ir <dir> --legacy <root> --report <f.json> [--out file]   offline collision/raycast/spline checks
           acr-ref stage-verify   --ir <dir> --game <dir with Paks incl. the built container> [--out file]   CUE4Parse re-read
           acr-ref stage-selftest --legacy <root>   byte-exact round trips of the host packages

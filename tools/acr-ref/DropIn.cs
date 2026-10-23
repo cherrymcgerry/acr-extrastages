@@ -16,7 +16,7 @@ namespace AcrRef;
 internal sealed class Dr2Materials
 {
     readonly Toml _cfg;
-    readonly string _legacy, _outRoot, _texDir, _root;
+    readonly string _legacy, _outRoot, _texDir, _root, _irDir;
     readonly int _maxSize;
     readonly Dictionary<string, string> _textures = new(), _mics = new();
     public readonly JsonArray Log = new();
@@ -25,11 +25,12 @@ internal sealed class Dr2Materials
     public int MicCount => _mics.Count;
     string? _orm, _normal;
 
-    public Dr2Materials(Toml cfg, string irDir, string legacy, string outRoot)
+    public Dr2Materials(Toml cfg, string irDir, string legacy, string outRoot, string? packageRootOverride = null)
     {
         _cfg = cfg; _legacy = legacy; _outRoot = outRoot;
+        _irDir = irDir;
         _texDir = Path.Combine(irDir, "textures");
-        _root = cfg.Str("dr2_textures", "package_root").TrimEnd('/');
+        _root = (packageRootOverride ?? cfg.Str("dr2_textures", "package_root")).TrimEnd('/');
         _maxSize = (int)cfg.Num("dr2_textures", "max_size");
     }
 
@@ -193,34 +194,168 @@ internal sealed class Dr2Materials
         return _mics[name] = path;
     }
 
+    // ---- stand-in textures for stages whose location is not the one config/visuals.toml names ----------------------------
+
+    bool Usable(string name)
+    {
+        var p = Path.Combine(_texDir, name + ".dds");
+        if (!File.Exists(p)) return false;
+        try { _ = new Dds(p); return true; } catch (NotSupportedException) { return false; }
+    }
+
+    string? _terrainTex, _roadTex;
+    /// The ground detail texture (a DDS name in the stage textures). The configured [dr2_textures] terrain/road are New
+    /// Zealand's texture-array slices; elsewhere the stage's own diffuse texture array supplies the same slice number,
+    /// and stages without one (terrain_road / terrain_wsm shaders) take the diffuse most used by their terrain materials.
+    public string TerrainTexture => _terrainTex ??= ResolveGround("terrain");
+    public string RoadTexture => _roadTex ??= ResolveGround("road");
+
+    string ResolveGround(string kind)
+    {
+        var configured = _cfg.Str("dr2_textures", kind);
+        if (Usable(configured)) return configured;
+        string? pick = null; string how;
+        var names = Directory.GetFiles(_texDir, "*.dds").Select(f => Path.GetFileNameWithoutExtension(f)).ToList();
+        var family = names.Where(n => n.EndsWith("_slice0")).Select(n => n[..^"_slice0".Length])
+            .Where(n => Regex.IsMatch(n, @"_d\d+$")).Order().FirstOrDefault();
+        if (family is not null)
+        {
+            int count = names.Count(n => n.StartsWith(family + "_slice")), want = int.Parse(Regex.Match(configured, @"_slice(\d+)$") is { Success: true } sm ? sm.Groups[1].Value : "0");
+            pick = $"{family}_slice{Math.Min(want, count - 1)}"; how = $"stage texture array {family}";
+        }
+        else
+        {
+            // terrain materials: the most used TDiffuseSpecMap1, road shaders counted apart
+            var terr = new Dictionary<string, int>(); var road = new Dictionary<string, int>();
+            foreach (var f in new[] { "terrain.materials.json", "terrain_low.materials.json" })
+            {
+                var path = Path.Combine(_irDir, "render", f);
+                if (!File.Exists(path)) continue;
+                foreach (var mat in JsonNode.Parse(File.ReadAllText(path))!.AsArray())
+                {
+                    var t = mat!["textures"]!.AsArray().FirstOrDefault(x => x!["parameter"]!.GetValue<string>() == "TDiffuseSpecMap1");
+                    if (t is null) continue;
+                    var r = t["texture"]!.GetValue<string>();
+                    var n = Path.GetFileNameWithoutExtension(r[(r.IndexOf('#') + 1)..]);
+                    var into = (mat["shader_group"]?.GetValue<string>() ?? "").Contains("road", StringComparison.OrdinalIgnoreCase) ? road : terr;
+                    into[n] = into.GetValueOrDefault(n) + 1;
+                }
+            }
+            var ranked = (kind == "road" && road.Count > 0 ? road : terr).OrderByDescending(kv => kv.Value).Select(kv => kv.Key).Where(Usable).ToList();
+            if (ranked.Count == 0) ranked = road.Concat(terr).OrderByDescending(kv => kv.Value).Select(kv => kv.Key).Where(Usable).ToList();
+            pick = ranked.FirstOrDefault(); how = "most used TDiffuseSpecMap1 of the terrain materials";
+        }
+        pick ??= names.Where(n => n.EndsWith("_d") && Usable(n)).Order().FirstOrDefault(); how = pick is null ? "none" : how;
+        if (pick is null) throw new FileNotFoundException($"{configured}: not in {_texDir} and no stand-in {kind} texture found there");
+        Log.Add($"{kind} texture: {configured} not in the stage textures, using {pick} ({how})");
+        Console.WriteLine($"dr2: {kind} texture {configured} not in the stage textures, using {pick} ({how})");
+        return pick;
+    }
+
+    string? FindVista(string kind) => Directory.GetFiles(_texDir, "*.dds").Select(f => new FileInfo(f))
+        .Where(f => f.Name.Contains("vista", StringComparison.OrdinalIgnoreCase) && f.Name.EndsWith($"_{kind}.dds", StringComparison.OrdinalIgnoreCase))
+        .Where(f => Usable(Path.GetFileNameWithoutExtension(f.Name)))
+        .OrderByDescending(f => f.Length).Select(f => Path.GetFileNameWithoutExtension(f.Name)).FirstOrDefault();
+
+    /// Three layer diffuse textures for the vista bake: the configured ones, else the stage's own vista diffuses, else the ground textures.
+    IEnumerable<string> VistaLayers()
+    {
+        var cfg = _cfg.Arr("dr2_textures", "vista_layers").Cast<string>().ToList();
+        if (cfg.All(Usable)) return cfg;
+        bool Decodable(string n) { try { return new Dds(Path.Combine(_texDir, n + ".dds")).Format != Dds.Fmt.BC5; } catch (NotSupportedException) { return false; } }
+        var own = Directory.GetFiles(_texDir, "*vista*_d.dds").Select(f => Path.GetFileNameWithoutExtension(f)).Where(Decodable).Order().ToList();
+        var fill = new[] { TerrainTexture, RoadTexture, TerrainTexture }.Where(Decodable).ToList();
+        var layers = own.Concat(fill).ToList();
+        if (layers.Count == 0) throw new InvalidDataException($"{_texDir}: no decodable (BC1/BC3/BC4) texture to stand in for the vista layers");
+        while (layers.Count < 3) layers.Add(layers[0]);
+        Log.Add($"vista layers: configured {string.Join(", ", cfg)} not all in the stage textures, using {string.Join(", ", layers.Take(3))}");
+        return layers.Take(3);
+    }
+
+
+    /// Mean colour (0..255 per channel) of a mip. BC7 has no decoder here: the mean of each block's colour endpoints stands in
+    /// (exact for flat blocks, close otherwise; the layers only set the vista's overall tint).
+    static double[] MeanRgb(Dds d, int m)
+    {
+        if (d.Format != Dds.Fmt.BC7)
+        {
+            var p = d.Decode(m)!;
+            return Enumerable.Range(0, 3).Select(c => Enumerable.Range(0, p.Length / 4).Average(i => (double)p[i * 4 + c])).ToArray();
+        }
+        // mode -> (subsets, colour bits, p-bits per endpoint pair kind, bits before the colour fields)
+        var src = d.Mips[m];
+        var sum = new double[3]; long n = 0;
+        for (int b = 0; b + 16 <= src.Length; b += 16)
+        {
+            int mode = 0; while (mode < 8 && (src[b] >> mode & 1) == 0) mode++;
+            if (mode >= 8) continue;
+            int pos = mode + 1;
+            (int subsets, int partBits, int rotBits, int cb) = mode switch
+            {
+                0 => (3, 4, 0, 4), 1 => (2, 6, 0, 6), 2 => (3, 6, 0, 5), 3 => (2, 6, 0, 7),
+                4 => (1, 0, 2, 5), 5 => (1, 0, 2, 7), 6 => (1, 0, 0, 7), _ => (2, 6, 0, 5),
+            };
+            int Bits(int count) { int v = 0; for (int i = 0; i < count; i++, pos++) v |= (src[b + pos / 8] >> (pos % 8) & 1) << i; return v; }
+            Bits(partBits); Bits(rotBits); if (mode == 4) Bits(1);
+            int ends = subsets * 2;
+            var rgb = new int[3, ends];
+            for (int c = 0; c < 3; c++) for (int e = 0; e < ends; e++) rgb[c, e] = Bits(cb);
+            for (int c = 0; c < 3; c++)
+                for (int e = 0; e < ends; e++)
+                {
+                    double v = rgb[c, e];
+                    sum[c] += v * 255.0 / ((1 << cb) - 1);
+                }
+            n += ends;
+        }
+        return n == 0 ? [128, 128, 128] : sum.Select(s => s / n).ToArray();
+    }
     /// Vista: DR2's large colour map (grey-centred tint) x 2 over its three detail layers' mean colours, mixed by the
     /// large blend map (R: layer 2, G: layer 3), baked at vista_size as BC1.
     public string VistaMic()
     {
         int size = (int)_cfg.Num("dr2_textures", "vista_size");
-        var cm = new Dds(Path.Combine(_texDir, _cfg.Str("dr2_textures", "vista_colour_map") + ".dds"));
-        var mk = new Dds(Path.Combine(_texDir, _cfg.Str("dr2_textures", "vista_blend_map") + ".dds"));
-        var layers = _cfg.Arr("dr2_textures", "vista_layers").Cast<string>().Select(n =>
+        // The configured names are New Zealand's. For other locations the stage's own textures stand in (see FindVista /
+        // VistaLayers); a missing colour or blend map is flat (grey tint / first layer only).
+        var cmName = Usable(_cfg.Str("dr2_textures", "vista_colour_map")) ? _cfg.Str("dr2_textures", "vista_colour_map") : FindVista("cm");
+        var mkName = Usable(_cfg.Str("dr2_textures", "vista_blend_map")) ? _cfg.Str("dr2_textures", "vista_blend_map") : FindVista("mk");
+        var layers = VistaLayers().Select(n =>
         {
             var d = new Dds(Path.Combine(_texDir, n + ".dds"));
             int m = Enumerable.Range(0, d.Mips.Count).First(i => d.MipWidth(i) <= 64);
-            var p = d.Decode(m)!;
-            return Enumerable.Range(0, 3).Select(c => Enumerable.Range(0, p.Length / 4).Average(i => (double)p[i * 4 + c])).ToArray();
+            return MeanRgb(d, m);
         }).ToArray();
-        byte[] At(Dds d) { int m = Enumerable.Range(0, d.Mips.Count).First(i => d.MipWidth(i) <= size); return d.Decode(m)!; }
-        var c = At(cm); var k = At(mk);
-        var px = new byte[size * size * 4];
-        for (int i = 0; i < size * size; i++)
+        // (pixels, width, height) of the first mip not wider than the bake size, null when the map is absent or not decodable
+        (byte[] p, int w, int h)? Map(string? n)
         {
-            double w2 = k[i * 4] / 255.0, w3 = k[i * 4 + 1] / 255.0, w1 = Math.Max(0, 1 - w2 - w3);
-            for (int ch = 0; ch < 3; ch++)
+            if (n is null) return null;
+            try
             {
-                double layer = w1 * layers[0][ch] + w2 * layers[1][ch] + w3 * layers[2][ch];
-                px[i * 4 + ch] = (byte)Math.Clamp(2 * c[i * 4 + ch] / 255.0 * layer, 0, 255);
+                var d = new Dds(Path.Combine(_texDir, n + ".dds"));
+                int m = Enumerable.Range(0, d.Mips.Count).First(i => d.MipWidth(i) <= size);
+                return d.Decode(m) is { } p ? (p, d.MipWidth(m), d.MipHeight(m)) : null;
             }
-            px[i * 4 + 3] = 255;
+            catch (NotSupportedException) { return null; }
         }
-        var name = _cfg.Str("dr2_textures", "vista_colour_map") + "_baked";
+        var c = Map(cmName); var k = Map(mkName);
+        if (cmName is null || c is null) Log.Add("vista: no usable colour map in the stage textures, flat tint");
+        if (mkName is null || k is null) Log.Add("vista: no usable blend map in the stage textures, first layer only");
+        var px = new byte[size * size * 4];
+        for (int y = 0; y < size; y++)
+            for (int x = 0; x < size; x++)
+            {
+                int i = y * size + x;
+                int ci = c is { } cc ? ((y * cc.h / size) * cc.w + x * cc.w / size) * 4 : -1, ki = k is { } kk ? ((y * kk.h / size) * kk.w + x * kk.w / size) * 4 : -1;
+                double w2 = ki >= 0 ? k!.Value.p[ki] / 255.0 : 0, w3 = ki >= 0 ? k!.Value.p[ki + 1] / 255.0 : 0, w1 = Math.Max(0, 1 - w2 - w3);
+                for (int ch = 0; ch < 3; ch++)
+                {
+                    double layer = w1 * layers[0][ch] + w2 * layers[1][ch] + w3 * layers[2][ch];
+                    double tint = ci >= 0 ? c!.Value.p[ci + ch] / 255.0 : 0.5;
+                    px[i * 4 + ch] = (byte)Math.Clamp(2 * tint * layer, 0, 255);
+                }
+                px[i * 4 + 3] = 255;
+            }
+        var name = (cmName ?? "vista") + "_baked";
         PreviewPixels = (name, size, px);
         return Mic("vista", Texture(name, Dds.Fmt.BC1, false, size, size, Dds.Bc1Chain(px, size, size)));
     }
@@ -237,8 +372,16 @@ internal sealed class Dr2Materials
         if (tex is null) { why = "no diffuse texture"; return null; }
         var r = tex["texture"]!.GetValue<string>();
         var dds = Path.ChangeExtension(r[(r.IndexOf('#') + 1)..], null);
-        if (!File.Exists(Path.Combine(_texDir, dds + ".dds"))) { why = "diffuse not exported from DR2"; return null; }
-        try { _ = new Dds(Path.Combine(_texDir, dds + ".dds")); }
+        // Missing sponsor/shared textures (cloth, teardrop, lazerstart, …) or unsupported texel formats: skip this
+        // object section rather than failing the stage build (caller draws class proxy / omits DR2 material).
+        var path = Path.Combine(_texDir, dds + ".dds");
+        if (!File.Exists(path))
+        {
+            var slice0 = Path.Combine(_texDir, dds + "_slice0.dds");
+            if (File.Exists(slice0)) path = slice0;
+            else { why = "diffuse not exported from DR2"; return null; }
+        }
+        try { _ = new Dds(path); }
         catch (NotSupportedException e) { why = $"unsupported DDS ({e.Message[(e.Message.IndexOf(':') + 2)..]})"; return null; }
         return dds;
     }

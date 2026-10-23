@@ -105,6 +105,11 @@ internal static class VisualObjects
             bool tree = shapes.Any(s => s.Material == "PM_WallWoodTreeTrunks") || templates[tname]?["bodies"]?.AsArray()
                 .SelectMany(b => b!["shapes"]!.AsArray()).Any(s => treeClasses.Contains(s!["shape_class"]?.GetValue<string>() ?? "")) == true;
 
+            // solid bush colliders (PM_WallBush): soft vegetation is not drawn (v1.4); the colliders stay in BakedData. Drawn they were up to 3M triangles of bushes.
+            if (!tree && shapes.Count > 0 && shapes.All(s => ClassOf(s.Material) == "soft"))
+            {
+                notSolid++; perTemplate.TryAdd(tname, "bush collider: not drawn"); continue;
+            }
             var before = sec.ToDictionary(kv => kv.Key, kv => kv.Value.Pos.Count);
             double baseZ = Ue(origin).Z;
             void DrawShape(ObjectColliders.Shape s)

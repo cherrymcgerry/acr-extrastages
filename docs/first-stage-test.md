@@ -9,14 +9,14 @@ What this test answers: can a DR2 stage be driven start to finish in ACR on DR2'
 with working start, splits and finish? **Nothing of DR2 is visible yet.** You drive on an invisible
 road while Hafren South's scenery is drawn around you, often cutting through it.
 
-## 0. Build (skip if `work\acr\dist\zz_acrdirt_nz01r5_P.*` exists)
+## 0. Build (skip if `work\acr\dist\zz_acrxs_nz01r5_P.*` exists)
 
 ```powershell
 cd C:\Users\robbe\Projects\acr-dirt
-pwsh -NoProfile -File mods\acrdirt-stage\build.ps1 -Verify      # ~1 min; ends with ALL PASS
+pwsh -NoProfile -File mods\stage\build.ps1 -Verify      # ~1 min; ends with ALL PASS
 ```
 
-Output is `work\acr\dist\zz_acrdirt_nz01r5_P.{utoc,ucas,pak}` (~230 MB). It needs the stage IR in
+Output is `work\acr\dist\zz_acrxs_nz01r5_P.{utoc,ucas,pak}` (~230 MB). It needs the stage IR in
 `work\ir\new_zealand_rally_01_route_5` (`dr2-extract stage-ir new_zealand_rally_01_route_5 --render`).
 
 ## 1. Install (manual, reversible)
@@ -26,12 +26,12 @@ loads last wins.
 
 ```powershell
 $paks = 'C:\Program Files (x86)\Steam\steamapps\common\Assetto Corsa Rally\acr\Content\Paks'
-Remove-Item "$paks\~mods\zz_acrdirt_test_P.*", "$paks\~mods\zz_acrdirt_ramp_P.*" -ErrorAction SilentlyContinue
+Remove-Item "$paks\~mods\zz_acrxs_test_P.*", "$paks\~mods\zz_acrxs_ramp_P.*" -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force "$paks\~mods" | Out-Null
-Copy-Item C:\Users\robbe\Projects\acr-dirt\work\acr\dist\zz_acrdirt_nz01r5_P.* "$paks\~mods\"
+Copy-Item C:\Users\robbe\Projects\acr-dirt\work\acr\dist\zz_acrxs_nz01r5_P.* "$paks\~mods\"
 ```
 
-**Rollback:** `Remove-Item "$paks\~mods\zz_acrdirt_*"`. If anything still looks off, use Steam → Verify
+**Rollback:** `Remove-Item "$paks\~mods\zz_acrxs_*"`. If anything still looks off, use Steam → Verify
 integrity.
 
 **Recommended:** have [ACR Rewind](../../acr-rewind/README.md) installed. With an invisible road you
@@ -171,9 +171,9 @@ with the original v1 BakedData); test order in `work\acr\bisect\TESTS.md`.
 
 ## v2 test (after fixed v1 loads and drives)
 
-`work\acr\dist-v2\zz_acrdirt_nz01r5_P.*` uses the **same container name** as v1 and overrides the same four host
+`work\acr\dist-v2\zz_acrxs_nz01r5_P.*` uses the **same container name** as v1 and overrides the same four host
 packages. Install only one of them: remove the v1 files from `~mods` before copying v2 in (and back to switch).
-Build: `.\mods\acrdirt-stage\build.ps1 -Version v2 -Verify` (offline: PASS 50 / FAIL 0). Sizes: ucas 230,347,525,
+Build: `.\mods\stage\build.ps1 -Version v2 -Verify` (offline: PASS 50 / FAIL 0). Sizes: ucas 230,347,525,
 utoc 43,227, pak 347.
 
 What v2 adds over v1:
@@ -203,9 +203,9 @@ walls sunk).
 
 ## v1.1 test: visible road (fixed v1 + interim visuals)
 
-`work\acr\dist-v1.1\zz_acrdirt_nz01r5_P.*` uses the **same container name** as v1 and v2, so install only one of
-them: remove any other `zz_acrdirt_nz01r5_P.*` from `~mods` first.
-Build: `.\mods\acrdirt-stage\build.ps1 -Version v1.1 -Verify` (offline: PASS 46 / FAIL 0).
+`work\acr\dist-v1.1\zz_acrxs_nz01r5_P.*` uses the **same container name** as v1 and v2, so install only one of
+them: remove any other `zz_acrxs_nz01r5_P.*` from `~mods` first.
+Build: `.\mods\stage\build.ps1 -Version v1.1 -Verify` (offline: PASS 46 / FAIL 0).
 Sizes: ucas 297,359,632, utoc 55,503, pak 347. It has the same collision, pacenotes and respawn walls as fixed v1
 (no objects).
 
@@ -257,8 +257,8 @@ v1.2 keeps the same geometry on the same component but points the start trigger'
 trigger's small ring. The native code then hides, rebuilds or recolours that ring, and the visuals component is
 referenced by nothing. Collision, placement (DR2 lowered 47 m) and materials are unchanged from v1.1.
 
-Install `work\acr\dist-v1.2\zz_acrdirt_nz01r5_P.*` only (same container name: remove v1/v1.1/v2 first).
-Build: `.\mods\acrdirt-stage\build.ps1 -Version v1.2 -Verify` (offline: 30 PASS / 0 FAIL in direct and round-trip
+Install `work\acr\dist-v1.2\zz_acrxs_nz01r5_P.*` only (same container name: remove v1/v1.1/v2 first).
+Build: `.\mods\stage\build.ps1 -Version v1.2 -Verify` (offline: 30 PASS / 0 FAIL in direct and round-trip
 checks). Sizes: ucas 297,359,632, utoc 55,503, pak 347.
 
 Check:
@@ -282,8 +282,8 @@ If the geometry still vanishes, test the ordered set in `work\acr\visual-bisect\
 
 ## v1.3 test: v1.2 + solid DR2 objects (visible) + pacenotes + respawn walls
 
-`work\acr\dist-v1.3\zz_acrdirt_nz01r5_P.*`: same container name, so install only this one.
-Build: `.\mods\acrdirt-stage\build.ps1 -Version v1.3 -Verify` (offline: CUE4Parse 11 PASS / 0 FAIL, round trip
+`work\acr\dist-v1.3\zz_acrxs_nz01r5_P.*`: same container name, so install only this one.
+Build: `.\mods\stage\build.ps1 -Version v1.3 -Verify` (offline: CUE4Parse 11 PASS / 0 FAIL, round trip
 30 PASS / 0 FAIL). Sizes: ucas 349,199,620, utoc 64,995, pak 347.
 
 What v1.3 adds to v1.2 (placement, ground and the visuals fix are unchanged):
@@ -351,8 +351,8 @@ the ground looks (screenshot): textured, stretched, or a flat or black colour.
 
 ## v1.4 test: v1.3 without the green, nothing in the road unless solid, pacenote report
 
-`work\acr\dist-v1.4\zz_acrdirt_nz01r5_P.*`: same container name, so install only this one (remove v1.3's three files
-first). Build: `.\mods\acrdirt-stage\build.ps1 -Version v1.4 -Verify`.
+`work\acr\dist-v1.4\zz_acrxs_nz01r5_P.*`: same container name, so install only this one (remove v1.3's three files
+first). Build: `.\mods\stage\build.ps1 -Version v1.4 -Verify`.
 - Offline: CUE4Parse 11 PASS / 0 FAIL, round trip 42 PASS / 0 FAIL.
 - Sizes: ucas 327,522,107, utoc 61,023, pak 347.
 
@@ -407,8 +407,8 @@ Variant: `work\acr\dist-v1.4-crowns` (`-Vegetation crowns -Tag nz01r5-v1.4-crown
 
 ## v1.5 test: calls on their own corners, canopies drawn at car height only
 
-`work\acr\dist-v1.5\zz_acrdirt_nz01r5_P.*`: same container name, so remove v1.4's three files first. Build:
-`.\mods\acrdirt-stage\build.ps1 -Version v1.5 -Verify`.
+`work\acr\dist-v1.5\zz_acrxs_nz01r5_P.*`: same container name, so remove v1.4's three files first. Build:
+`.\mods\stage\build.ps1 -Version v1.5 -Verify`.
 - Offline: CUE4Parse 11 PASS / 0 FAIL, round trip 44 PASS / 0 FAIL.
 - Sizes: ucas 329,207,724, utoc 61,335, pak 347.
 - Triangles: 1,296,219 (objects 285,283).
@@ -464,8 +464,8 @@ If it's still late everywhere, try Pacenote Anticipation "Early" once and say wh
 
 ## v1.6 test: Hafren South's scenery hidden, DR2 vista, "Te Awanga Sprint Reverse"
 
-`work\acr\dist-v1.6\zz_acrdirt_nz01r5_P.*`: same container name, so remove v1.5's three files first. Build:
-`.\mods\acrdirt-stage\build.ps1 -Version v1.6 -Verify`.
+`work\acr\dist-v1.6\zz_acrxs_nz01r5_P.*`: same container name, so remove v1.5's three files first. Build:
+`.\mods\stage\build.ps1 -Version v1.6 -Verify`.
 - Offline: 118 PASS / 0 FAIL (CUE4Parse on the mounted container 11, round trip 53).
 - Sizes: ucas 397,253,138, utoc 74,132, pak 347. The container is 68 MB bigger than v1.5, because it now also carries
   the persistent level (WalesS4HafrenSouth.umap, with its 20 MB .ubulk) and ST_Track.
@@ -522,9 +522,9 @@ Report:
 
 ## v1.7 test: textured ground and road, Hawke's Bay sky
 
-`work\acr\dist-v1.7\zz_acrdirt_nz01r5_P.*`: same container name as v1.6, so install one or the other, never both.
+`work\acr\dist-v1.7\zz_acrxs_nz01r5_P.*`: same container name as v1.6, so install one or the other, never both.
 v1.6 in `work\acr\dist-v1.6` is unchanged, so its test can still be done first. Build:
-`.\mods\acrdirt-stage\build.ps1 -Version v1.7 -Verify`.
+`.\mods\stage\build.ps1 -Version v1.7 -Verify`.
 - Offline: 123 PASS / 0 FAIL. This includes the sky actor re-read through CUE4Parse from the shipped container,
   and the road UV layout on the round trip.
 - Sizes: ucas 418,590,148, utoc 78,032, pak 347. That is 21 MB more than v1.6, for the extra road UV channels and the
@@ -577,8 +577,8 @@ Report:
 
 ## v1.8 test: DR2's own textures (drop-in)
 
-`work\acr\dist-v1.8\zz_acrdirt_nz01r5_P.*`: v1.7 with one change, the DR2 textures. The container name is the same as
-v1.6 and v1.7, and `dist-v1.6` and `dist-v1.7` are unchanged. Build: `.\mods\acrdirt-stage\build.ps1 -Version v1.8 -Verify`.
+`work\acr\dist-v1.8\zz_acrxs_nz01r5_P.*`: v1.7 with one change, the DR2 textures. The container name is the same as
+v1.6 and v1.7, and `dist-v1.6` and `dist-v1.7` are unchanged. Build: `.\mods\stage\build.ps1 -Version v1.8 -Verify`.
 - Offline: 174 PASS / 0 FAIL in the build log. CUE4Parse loads all 20 new materials from the shipped container, with
   parent `M_Simple` and 22 textures. The textures are not virtual, NeverStream, and every mip's data is present.
 - Previews decoded from the shipped container: `work\acr\v1.8-previews\nz01r5-v1.8`. DR2 sources and the vista
@@ -590,7 +590,7 @@ v1.6 and v1.7, and `dist-v1.6` and `dist-v1.7` are unchanged. Build: `.\mods\acr
   material. Reverting all four rebuilds v1.7 byte for byte (verified).
 
 What changed from v1.7:
-- **New packages** under `/Game/AcrDirt/Dr2Tex/nz01r5`:
+- **New packages** under `/Game/AcrXs/Dr2Tex/nz01r5`:
   - Textures: `Tex/T_*` (clones of plain cooked `Texture2D`s, DR2's BCn mips copied, capped at 2048).
   - Materials: `Mat/MI_*` (MaterialInstanceConstants of ACR's opaque `M_Simple`, with a flat roughness map and a
     flat normal map).
@@ -623,7 +623,7 @@ If the stage fails to load or something looks broken, rebuild with `-Dr2Revert o
 retry.
 
 Install:
-1. Remove every previous `zz_acrdirt_*` file from `~mods`.
+1. Remove every previous `zz_acrxs_*` file from `~mods`.
 2. Copy the three files from `work\acr\dist-v1.8` into `~mods`.
 
 Report:
@@ -633,8 +633,8 @@ Report:
 
 ## v1.9 test: orange panels, slope streaks and Hafren's leftover scenery fixed
 
-`work\acr\dist-v1.9\zz_acrdirt_nz01r5_P.*`: v1.8 with three fixes, nothing else changed. The container name is the
-same as before, and `dist-v1.6` to `dist-v1.8` are unchanged. Build: `.\mods\acrdirt-stage\build.ps1 -Version v1.9 -Verify`.
+`work\acr\dist-v1.9\zz_acrxs_nz01r5_P.*`: v1.8 with three fixes, nothing else changed. The container name is the
+same as before, and `dist-v1.6` to `dist-v1.8` are unchanged. Build: `.\mods\stage\build.ps1 -Version v1.9 -Verify`.
 - Offline: 181 PASS / 0 FAIL. Sizes: ucas 504,605,357 (8 MB more than v1.8, from the duplicated terrain vertices),
   utoc 98,197, pak 347. Triangles: 1,519,474, the same as v1.8.
 
@@ -680,15 +680,15 @@ Check:
 4. As before: road texture, objects, start, timer, pacenotes, respawn.
 
 Install:
-1. Remove every previous `zz_acrdirt_*` file from `~mods`.
+1. Remove every previous `zz_acrxs_*` file from `~mods`.
 2. Copy the three files from `work\acr\dist-v1.9` into `~mods`.
 
 Report: screenshots at the same spots as v1.8 (0.5, 1.0 and 1.4 km), and anything that broke.
 
 ## v1.10 test: ground drawn from DR2's render terrain (no sky holes, no floating sheets)
 
-`work\acr\dist-v1.10\zz_acrdirt_nz01r5_P.*`: v1.9 with one change, nothing else. Build:
-`.\mods\acrdirt-stage\build.ps1 -Version v1.10 -Verify`. Offline: 189 PASS / 0 FAIL. Sizes: ucas 578,496,455, utoc
+`work\acr\dist-v1.10\zz_acrxs_nz01r5_P.*`: v1.9 with one change, nothing else. Build:
+`.\mods\stage\build.ps1 -Version v1.10 -Verify`. Offline: 189 PASS / 0 FAIL. Sizes: ucas 578,496,455, utoc
 111,721, pak 347.
 
 Cause (verified offline, `acr-ref terrain-compare`):
@@ -730,13 +730,13 @@ Check:
 6. As before: road texture, objects, cones, no Hafren scenery, start, timer, pacenotes, respawn.
 
 Install:
-1. Remove every previous `zz_acrdirt_*` file from `~mods`.
+1. Remove every previous `zz_acrxs_*` file from `~mods`.
 2. Copy the three files from `work\acr\dist-v1.10` into `~mods`.
 
 ## v1.11 test: lighter ground, DR2's baked ground colours
 
-`work\acr\dist-v1.11\zz_acrdirt_nz01r5_P.*`: v1.10 with the ground simplified, DR2's own triangle winding kept, and
-DR2's baked ground colour tiles on it. Build: `.\mods\acrdirt-stage\build.ps1 -Version v1.11 -Verify`, about 2 minutes
+`work\acr\dist-v1.11\zz_acrxs_nz01r5_P.*`: v1.10 with the ground simplified, DR2's own triangle winding kept, and
+DR2's baked ground colour tiles on it. Build: `.\mods\stage\build.ps1 -Version v1.11 -Verify`, about 2 minutes
 (`-GroundBake off` keeps the v1.10 grass slice instead).
 - Offline: 191 PASS / 0 FAIL. Sizes: ucas 616,246,438, utoc 127,317, pak 347.
 - Physics is byte-identical to v1.9 and v1.10.
@@ -777,5 +777,5 @@ Check:
 5. As before: the car sits on the road, road texture, objects, start, timer, pacenotes, respawn.
 
 Install:
-1. Remove every previous `zz_acrdirt_*` file from `~mods`.
+1. Remove every previous `zz_acrxs_*` file from `~mods`.
 2. Copy the three files from `work\acr\dist-v1.11` into `~mods`.
