@@ -101,6 +101,6 @@ jobs:
         with:
           workspaces: tools/acr-mappings
 
-      - name: Package (-SkipHeavy: no retoc build)
+      - name: "Package (SkipHeavy, no retoc build)"
         shell: pwsh
         run: ./scripts/package.ps1 -SkipHeavy
