@@ -20,8 +20,10 @@ height profiles.
 
 ## Features
 
-- 30 extra stages across 13 locations: Argentina, Australia, Finland, Monte Carlo, Germany,
-  Greece, New Zealand, Poland, Scotland, Spain, Sweden, USA and Wales. New locations get their
+- 106 extra stages across 13 locations: Argentina, Australia, Finland, Monte Carlo, Germany,
+  Greece, New Zealand, Poland, Scotland, Spain, Sweden, USA and Wales. The launcher starts with a
+  recommended 30; Choose stages and type `all` for every stage that fits. The other 50 DiRT Rally
+  2.0 stages are longer than 9 km and do not fit, so they cannot be built. New locations get their
   own entry, flag, description and tile in the stage menu.
 - Pace notes for every stage, built on the game's own call vocabulary and distance calls.
 - Generated route map, track map and height profile in the stage menus, and loading backdrops.
@@ -40,13 +42,13 @@ height profiles.
 - *DiRT Rally 2.0*, **your own copy** (Steam or another store). It is only read, never modified.
   The stages cannot be made without it.
 - Disk space (estimates from the current build, to be confirmed for the release):
-  - about **20 GB** for the finished stage files in the ACR `~mods` folder (about 0.5-1 GB per
-    stage; install the whole set only if you have the room),
+  - about **0.7 GB** of stage files per stage (about **20 GB** for the recommended 30, about
+    **75 GB** for all 106 that fit),
   - plus about **15 GB** of free working space at the peak while the stages are generated
     (extracted DR2 data and intermediate files are removed stage by stage; what is left can be
-    deleted afterwards). In total, **about 36 GB free** are needed before building all 30 stages
-    (20 GB stage files + 15 GB working peak + 2 GB margin); fewer stages need proportionally less
-    stage-file space. `pwsh scripts\estimate-disk.ps1` prints the exact numbers for your selection.
+    deleted afterwards). In total, about **38 GB free** for the recommended 30 and about **90 GB
+    free** for all 106. The launcher states the number for whatever you have selected.
+    `pwsh scripts\estimate-disk.ps1` prints the same estimate.
   - on the same NTFS drive as the game: the launcher reads the game's files and installs the
     stages through hard links instead of copies, so they take no extra space.
 - An internet connection **once**, so a helper tool can fetch the Oodle compression library it
@@ -66,8 +68,9 @@ height profiles.
 2. Close the game and run **`AcrExtraStages.exe`**. It opens a console window with a menu.
 3. The launcher finds your ACR and DiRT Rally 2.0 installs through Steam (or asks you to type the
    folder) and remembers them.
-4. Optional: **Choose stages**. All 30 stages are selected by default; type numbers, ranges
-   (`5-8`) or a location name to switch them on or off.
+4. Optional: **Choose stages**. The recommended 30 are selected. Type `all` for every stage that
+   fits (106), `default` to go back to the 30, or numbers, ranges (`5-8`) and a location name to
+   switch individual stages. Stages marked "too long" are over 9 km and cannot be selected.
 5. Choose **Install**. The launcher checks free disk space and that the game is closed, then:
    - creates the game's mappings file the first time (ACR starts briefly by itself and closes
      again; or point it to a Dumper-7 `.usmap`),

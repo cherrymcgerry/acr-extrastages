@@ -45,6 +45,7 @@ param(
     [switch]$NoVerify,
     [double]$MaxLengthKm = 9,
     [switch]$Install,
+    [switch]$All,         # every enabled stage; without this, only stages marked default = true (the recommended 30)
     [switch]$ListOnly,
     [switch]$FailOnAnyError,   # exit 1 if any stage failed (default: exit 0 when at least one stage passed; failures are in the report)
     [string]$Config = (Join-Path (Split-Path $PSScriptRoot) 'config\stages.toml')
@@ -83,6 +84,7 @@ if ($LASTEXITCODE -ne 0) { throw 'gen-stage-specs.ps1 failed' }
 $plan = @()
 foreach ($st in $data.Stages) {
     if (-not $st.enabled) { continue }
+    if (-not $All -and -not $Only -and -not $st.default) { continue }
     $loc = $data.Locations[$st.location]
     $id = Get-AcrId $st.dr2 $loc.code
     if ($Only -and $id -notin $Only -and $st.dr2 -notin $Only) { continue }

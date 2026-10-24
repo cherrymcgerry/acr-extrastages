@@ -221,7 +221,7 @@ internal static class Program
             if (!e.Enabled) Ui.Detail(line.Trim());
             else Ui.Line(line);
         }
-        Ui.Line($"  {sel.Count} selected, {all.Count(e => e.Enabled)} available, {all.Count(e => !e.Enabled)} later (long stages, not built yet)");
+        Ui.Line($"  {sel.Count} selected, {all.Count(e => e.Enabled)} available (fit), {all.Count(e => e.Default)} recommended, {all.Count(e => !e.Enabled)} too long to fit");
     }
 
     static string Trunc(string s, int n) => s.Length <= n ? s : s[..(n - 1)] + "…";
@@ -314,10 +314,12 @@ internal static class Program
         {
             Ui.Head("Choose stages");
             PrintStages(c, all, sel);
-            Ui.Line("  numbers or ranges toggle (3 5-8), a location name toggles it, 'all', 'none', Enter = done");
+            Ui.Line("  numbers or ranges toggle (3 5-8), a location name toggles it");
+            Ui.Line("  'all' = every stage that fits, 'default' = the recommended 30, 'none', Enter = done");
             var a = Ui.Ask("  toggle", "");
             if (string.IsNullOrWhiteSpace(a)) break;
             if (a.Equals("all", StringComparison.OrdinalIgnoreCase)) { sel = all.Where(e => e.Enabled).Select(e => e.Id).ToHashSet(StringComparer.OrdinalIgnoreCase); continue; }
+            if (a.Equals("default", StringComparison.OrdinalIgnoreCase)) { sel = all.Where(e => e.Enabled && e.Default).Select(e => e.Id).ToHashSet(StringComparer.OrdinalIgnoreCase); continue; }
             if (a.Equals("none", StringComparison.OrdinalIgnoreCase)) { sel.Clear(); continue; }
             var locs = all.Where(e => e.Enabled && (e.LocationName.Equals(a, StringComparison.OrdinalIgnoreCase) || e.LocationKey.Equals(a, StringComparison.OrdinalIgnoreCase))).ToList();
             if (locs.Count > 0)

@@ -16,6 +16,7 @@ internal static class CatalogCommand
         var cache = Program.Option(args, "--cache") ?? Path.Combine("work", "dr2", "cache");
         var outPrefix = Program.Option(args, "--out") ?? Path.Combine("work", "dr2", "catalog");
         var corridor = float.Parse(Program.Option(args, "--corridor") ?? "250", System.Globalization.CultureInfo.InvariantCulture);
+        var metaOnly = args.Contains("--meta-only");
         var filter = new Regex(Program.Option(args, "--filter") ?? "_rally_", RegexOptions.IgnoreCase);
         var surfaceMap = SurfaceMap.Load(Program.Option(args, "--surface-map") ?? Path.Combine("config", "surface-map.toml"));
 
@@ -46,6 +47,24 @@ internal static class CatalogCommand
                     var progress = ProgressTrack.Load(await install.FetchAsync($"{routeDir}/progress_track.xml"));
                     var codriverPath = $"{routeDir}/{location}_codriver_1_pro_{route}_data.xml";
                     var codriver = install.Exists(codriverPath) ? Codriver.Load(await install.FetchAsync(codriverPath)) : null;
+                    if (metaOnly)
+                    {
+                        var startM = progress.GateOf("start");
+                        var finishM = progress.GateOf("finish");
+                        var meta = new Dictionary<string, object?>
+                        {
+                            ["id"] = $"{location}_route_{route}",
+                            ["name"] = StageNames.Stage(lng, location, route),
+                            ["location"] = StageNames.Location(lng, location, country),
+                            ["archive"] = Path.GetFileName(archive),
+                            ["length_m"] = MathF.Round(finishM.Distance - startM.Distance, 1),
+                            ["gates"] = progress.Gates.Count,
+                        };
+                        stages.Add(meta);
+                        Console.WriteLine($"{meta["id"],-40} {meta["length_m"],8} m  {meta["name"]}");
+                        continue;
+                    }
+
                     var jpk = await install.FetchAsync($"{routeDir}/track.jpk", temporary: true);
                     string key;
                     List<GroundTriangle>? triangles;
@@ -123,8 +142,9 @@ internal static class CatalogCommand
         md.AppendLine("|---|---|---|---:|---:|---:|---|");
         foreach (var s in stages)
         {
-            md.AppendLine($"| `{s["id"]}` | {s["name"]} | {s["location"]} | {s["length_m"]:F1} | {s["gates"]} | {s["pacenotes"]} | " +
-                          $"{string.Join(" ", ((Dictionary<string, int>)s["surfaces"]!).Keys)} |");
+            s.TryGetValue("surfaces", out var surf);
+            var codes = surf is Dictionary<string, int> d ? string.Join(" ", d.Keys) : "";
+            md.AppendLine($"| `{s.GetValueOrDefault("id")}` | {s.GetValueOrDefault("name")} | {s.GetValueOrDefault("location")} | {s.GetValueOrDefault("length_m")} | {s.GetValueOrDefault("gates")} | {s.GetValueOrDefault("pacenotes")} | {codes} |");
         }
 
         md.AppendLine();

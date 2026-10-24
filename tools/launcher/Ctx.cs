@@ -43,6 +43,7 @@ internal sealed class Ctx
             return pick;
         }
         if (S.Selected is not null) return enabled.Where(e => S.Selected.Contains(e.Id, StringComparer.OrdinalIgnoreCase)).ToList();
-        return enabled;
+        var defaults = enabled.Where(e => e.Default).ToList();
+        return defaults.Count > 0 ? defaults : enabled;
     }
 }

@@ -55,7 +55,7 @@ internal sealed class StagesConfig
             var dr2 = Str(st, "dr2") ?? throw new LauncherException("[[stages]] entry without dr2");
             var locKey = Str(st, "location") ?? throw new LauncherException($"{dr2}: no location");
             if (!Locations.TryGetValue(locKey, out var loc)) throw new LauncherException($"unknown location {locKey} for {dr2}");
-            list.Add(new StageEntry(AcrId(dr2, Str(loc, "code") ?? ""), dr2, locKey, Str(loc, "name") ?? locKey, Bool(st, "enabled"), st));
+            list.Add(new StageEntry(AcrId(dr2, Str(loc, "code") ?? ""), dr2, locKey, Str(loc, "name") ?? locKey, Bool(st, "enabled"), Bool(st, "default"), st));
         }
         return list;
     }
@@ -65,7 +65,7 @@ internal sealed class StagesConfig
     public static double? Num(Dictionary<string, object> d, string k) => d.TryGetValue(k, out var v) && v is double x ? x : null;
 }
 
-internal sealed record StageEntry(string Id, string Dr2, string LocationKey, string LocationName, bool Enabled, Dictionary<string, object> Raw);
+internal sealed record StageEntry(string Id, string Dr2, string LocationKey, string LocationName, bool Enabled, bool Default, Dictionary<string, object> Raw);
 
 /// config/launcher.toml: disk estimates and other launcher defaults (flat key = value lines).
 internal sealed class LauncherConfig
