@@ -20,7 +20,7 @@ namespace AcrRef;
 internal static class Scenery
 {
     public const string PersistentLevel = "acr/Content/Levels/WalesS4HafrenSouth.umap";
-    public const string Persistent = @"acr\Content\Levels\WalesS4HafrenSouth";
+    public const string Persistent = @"acr/Content/Levels/WalesS4HafrenSouth";
     const string CellClass = "WorldPartitionRuntimeLevelStreamingCell";
     // WorldPartitionRuntimeLevelStreamingCell slots (acr-ref schema): 0 LevelStreaming, 1 bIsAlwaysLoaded,
     // 2 bIsSpatiallyLoaded, 3 DataLayers, 4 bClientOnlyVisible, 5 bIsHLOD, 6 bBlockOnSlowLoading, 7 ContentBundleID,

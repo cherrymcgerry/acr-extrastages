@@ -245,7 +245,7 @@ internal sealed class Pipeline
                     .Select(x => x.Trim()).Distinct().ToList();
                 var msg = $"{error ?? "no container written"}; {string.Join(" | ", why)}";
                 r.reason = msg[..Math.Min(500, msg.Length)];
-                var miss = lines.FirstOrDefault(x => Regex.IsMatch(x, @"Could not find file '.*\\work\\ir\\"));
+                var miss = lines.FirstOrDefault(x => Regex.IsMatch(x, @"Could not find file '.*[\\/]work[\\/]ir[\\/]"));
                 if (miss is not null)
                 {
                     // prepared data is incomplete (a texture the render materials reference was never extracted)
@@ -338,7 +338,7 @@ internal sealed class Pipeline
             foreach (var p in s.ClonePackages) filters.Add(p.Key["/Game/".Length..]);
         var need = filters.Distinct().Where(f =>
         {
-            var rel = Path.Combine(legacy, "acr", "Content", f.Replace('/', '\\').TrimEnd('\\'));
+            var rel = Path.Combine(legacy, "acr", "Content", f.Replace('/', Path.DirectorySeparatorChar).TrimEnd(Path.DirectorySeparatorChar));
             var hasDir = Directory.Exists(rel) && Directory.EnumerateFiles(rel, "*", SearchOption.AllDirectories)
                 .Any(x => x.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase) || x.EndsWith(".umap", StringComparison.OrdinalIgnoreCase));
             return !hasDir && !File.Exists(rel + ".umap") && !File.Exists(rel + ".uasset");
@@ -363,15 +363,15 @@ internal sealed class Pipeline
         Vanilla.InvalidateIfStale(legacy, paks);
         var host = new (string Rel, string? Filter)[]
         {
-            (@"acr\Content\Environments\WalesS4HafrenSouth\DataAssets\DA_WalesS4HafrenSouthBakedData", null),
-            (@"acr\Content\Levels\WalesS4HafrenSouth\_Generated_\22VG0QIP9ATUQI633K86KWPFP", null),
-            (@"acr\Content\Data\Database\Main\TrackSelection\DT_TracksVariants", null),
-            (@"acr\Content\Data\Pacenote\Tables\DT_PacenoteHafrenSouthForward", null),
-            (@"acr\Content\Levels\WalesS4HafrenSouth", "WalesS4HafrenSouth.umap"),   // the bare name would match all of its cells
-            (@"acr\Content\Data\Localization\ContentTexts\ST_Track", null),
-            (@"acr\Content\Materials\PhotoMode\Textures\T_Dirt", null),
-            (@"acr\Content\Effects\Vehicles\Skid\T_SkidDebug_N", null),
-            (@"acr\Content\Environments\MonteCarloS2Sisteron\TileableMaterials\MI_SisteronConcrete01", null),
+            (@"acr/Content/Environments/WalesS4HafrenSouth/DataAssets/DA_WalesS4HafrenSouthBakedData", null),
+            (@"acr/Content/Levels/WalesS4HafrenSouth/_Generated_/22VG0QIP9ATUQI633K86KWPFP", null),
+            (@"acr/Content/Data/Database/Main/TrackSelection/DT_TracksVariants", null),
+            (@"acr/Content/Data/Pacenote/Tables/DT_PacenoteHafrenSouthForward", null),
+            (@"acr/Content/Levels/WalesS4HafrenSouth", "WalesS4HafrenSouth.umap"),   // the bare name would match all of its cells
+            (@"acr/Content/Data/Localization/ContentTexts/ST_Track", null),
+            (@"acr/Content/Materials/PhotoMode/Textures/T_Dirt", null),
+            (@"acr/Content/Effects/Vehicles/Skid/T_SkidDebug_N", null),
+            (@"acr/Content/Environments/MonteCarloS2Sisteron/TileableMaterials/MI_SisteronConcrete01", null),
         };
         foreach (var (rel, filter) in host)
         {
@@ -472,7 +472,7 @@ internal sealed class Pipeline
         Directory.CreateDirectory(outDir);
         foreach (var rel in new[]
                  {
-                     @"acr\Content\Levels\WalesS4HafrenSouth", @"acr\Content\Environments\WalesS4HafrenSouth\DataAssets", @"acr\Content\Data\Pacenote\Tables",
+                     @"acr/Content/Levels/WalesS4HafrenSouth", @"acr/Content/Environments/WalesS4HafrenSouth/DataAssets", @"acr/Content/Data/Pacenote/Tables",
                  })
         {
             var s = Path.Combine(legacy, rel);

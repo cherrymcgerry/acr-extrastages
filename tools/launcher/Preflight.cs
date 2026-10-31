@@ -4,7 +4,9 @@ namespace AcrExtraStages;
 
 internal static class Preflight
 {
-    public static bool AcrRunning() => Process.GetProcessesByName("acr").Length > 0 || Process.GetProcessesByName("acr-Win64-Shipping").Length > 0;
+    public static bool AcrRunning() => OperatingSystem.IsWindows()
+        ? Process.GetProcessesByName("acr").Length > 0 || Process.GetProcessesByName("acr-Win64-Shipping").Length > 0
+        : Unix.WineProcessRunning("acr.exe", "acr-Win64-Shipping.exe");
 
     /// Detect (or ask for) both games and persist them. Returns false when one is still missing.
     public static bool Detect(Ctx c, bool interactive)
@@ -72,11 +74,11 @@ internal static class Preflight
         Directory.CreateDirectory(c.L.Work);
         var need = c.Cfg.RequiredGb(stageCount);
         var free = FreeGb(c.L.Work);
-        var line = $"  free space on {Path.GetPathRoot(c.L.Work)}: {free:0.0} GB (estimate needed for {stageCount} stage(s): {need:0} GB)";
+        var line = $"  free space on {VolumeOf(c.L.Work)}: {free:0.0} GB (estimate needed for {stageCount} stage(s): {need:0} GB)";
         if (free < need)
         {
             if (c.IgnoreDisk || !forBuild) { Ui.Warn(line); r.Warnings.Add($"low disk space: {free:0.0} GB free, {need:0} GB estimated"); }
-            else r.Errors.Add($"not enough free space on {Path.GetPathRoot(c.L.Work)}: {free:0.0} GB free, about {need:0} GB needed (config\\launcher.toml; --ignore-disk-space to try anyway)");
+            else r.Errors.Add($"not enough free space on {VolumeOf(c.L.Work)}: {free:0.0} GB free, about {need:0} GB needed (config\\launcher.toml; --ignore-disk-space to try anyway)");
         }
         else Ui.Line(line);
         if (c.AcrDir is not null && !SameVolume(c.L.Work, c.AcrDir))
@@ -94,9 +96,9 @@ internal static class Preflight
             var p = c.L.FindTool(t);
             if (p is null)
             {
-                if (t == "acr-mappings") r.Warnings.Add("acr-mappings.exe not found: a Dumper-7 usmap (--usmap) is required");
-                else if (forBuild) r.Errors.Add($"{t}.exe not found (tools\\{t}\\ next to the launcher, or work\\bin for developers)");
-                else r.Warnings.Add($"{t}.exe not found");
+                if (t == "acr-mappings") r.Warnings.Add($"{Layout.Exe("acr-mappings")} not found: a Dumper-7 usmap (--usmap) is required");
+                else if (forBuild) r.Errors.Add($"{Layout.Exe(t)} not found ({Path.Combine("tools", t)} next to the launcher, or {Path.Combine("work", "bin")} for developers)");
+                else r.Warnings.Add($"{Layout.Exe(t)} not found");
             }
             else Ui.Line($"  {t}: {p}");
         }
@@ -116,8 +118,11 @@ internal static class Preflight
         return r;
     }
 
-    public static double FreeGb(string path) => new DriveInfo(Path.GetPathRoot(Path.GetFullPath(path))!).AvailableFreeSpace / (1024.0 * 1024 * 1024);
+    public static double FreeGb(string path) => new DriveInfo(VolumeOf(path)).AvailableFreeSpace / (1024.0 * 1024 * 1024);
 
     public static bool SameVolume(string a, string b) =>
-        string.Equals(Path.GetPathRoot(Path.GetFullPath(a)), Path.GetPathRoot(Path.GetFullPath(b)), StringComparison.OrdinalIgnoreCase);
+        string.Equals(VolumeOf(a), VolumeOf(b), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    /// Drive root on Windows; on Linux the mount point holding the path (hard links never cross mounts, btrfs subvolumes included).
+    public static string VolumeOf(string path) => OperatingSystem.IsWindows() ? Path.GetPathRoot(Path.GetFullPath(path))! : Unix.MountOf(path);
 }

@@ -13,6 +13,14 @@ internal static class Steam
 
     public static string? SteamRoot()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            // native client (also SteamOS / Steam Deck), its ~/.steam links, Flatpak, Snap
+            foreach (var d in new[] { ".local/share/Steam", ".steam/steam", ".steam/root", ".var/app/com.valvesoftware.Steam/data/Steam", "snap/steam/common/.local/share/Steam" })
+                if (Directory.Exists(Path.Combine(home, d, "steamapps"))) return Path.GetFullPath(Path.Combine(home, d));
+            return null;
+        }
         foreach (var (hive, key, value) in new[]
                  {
                      (Registry.CurrentUser, @"Software\Valve\Steam", "SteamPath"),
@@ -93,7 +101,7 @@ internal static class Steam
     /// Build id of a Steam install from steamapps\appmanifest_<id>.acf two levels up (common\<game> -> steamapps).
     public static string? BuildId(string gameDir, int appId)
     {
-        var steamapps = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetFullPath(gameDir).TrimEnd('\\')));
+        var steamapps = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetFullPath(gameDir).TrimEnd('\\', '/')));
         if (steamapps is null) return null;
         var acf = Path.Combine(steamapps, $"appmanifest_{appId}.acf");
         return File.Exists(acf) ? AcfValue(acf, "buildid") : null;

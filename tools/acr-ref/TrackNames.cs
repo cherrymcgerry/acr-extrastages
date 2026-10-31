@@ -12,7 +12,7 @@ namespace AcrRef;
 /// n x (FString key, FString source), metadata map (copied).
 internal static class TrackNames
 {
-    public const string Table = @"acr\Content\Data\Localization\ContentTexts\ST_Track";
+    public const string Table = @"acr/Content/Data/Localization/ContentTexts/ST_Track";
 
     static string ReadStr(byte[] d, ref int p)
     {

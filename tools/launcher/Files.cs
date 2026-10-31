@@ -12,8 +12,17 @@ internal static partial class Files
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool CreateHardLinkW(string link, string target, IntPtr security);
 
+    [LibraryImport("libc", EntryPoint = "link", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
+    private static partial int PosixLink(string target, string link);
+
     public static void HardLink(string link, string target)
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            if (PosixLink(target, link) != 0)
+                throw new IOException($"hard link {link} -> {target} failed: {Marshal.GetPInvokeErrorMessage(Marshal.GetLastPInvokeError())}");
+            return;
+        }
         if (!CreateHardLinkW(link, target, IntPtr.Zero))
             throw new IOException($"hard link {link} -> {target} failed: {Marshal.GetPInvokeErrorMessage(Marshal.GetLastPInvokeError())}");
     }
@@ -106,7 +115,7 @@ internal static class Vanilla
     public static void AssertPaks(string paks)
     {
         var bad = Directory.EnumerateFiles(paks).Select(Path.GetFileName).Where(n => !Container.IsMatch(Path.GetFileNameWithoutExtension(n)!))
-            .Concat(Directory.EnumerateDirectories(paks).Select(d => Path.GetFileName(d) + "\\")).ToList();
+            .Concat(Directory.EnumerateDirectories(paks).Select(d => Path.GetFileName(d) + Path.DirectorySeparatorChar)).ToList();
         if (bad.Count > 0) throw new StepFailed($"non-vanilla build input in {paks}: {string.Join(", ", bad)}");
         if (!File.Exists(Path.Combine(paks, "global.utoc"))) throw new StepFailed($"no global.utoc in {paks}");
     }

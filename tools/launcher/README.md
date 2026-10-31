@@ -15,6 +15,16 @@ dotnet publish tools/launcher/AcrExtraStages.csproj -c Release -r win-x64 --self
 
 Output: `work/bin/launcher/AcrExtraStages.exe` (about 37 MB, compressed single file, no runtime needed).
 
+Linux (Steam + Proton; see [docs/linux.md](../../docs/linux.md)):
+
+```bash
+dotnet publish tools/launcher/AcrExtraStages.csproj -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true -o work/bin/launcher
+```
+
+Output: `work/bin/launcher/AcrExtraStages` (about 40 MB). Without `-r` the csproj picks the building OS. The runtime
+identifier also selects the logo renderer: `Logos.cs` (GDI+, `net10.0-windows`) for `win-*`, `Logos.Skia.cs`
+(SkiaSharp, `net10.0`) otherwise, so the Windows exe carries no SkiaSharp.
+
 ## Layout it expects
 
 Release zip (what `scripts/package.ps1` should produce):
@@ -36,6 +46,9 @@ next to the exe and under the root, then in the developer builds: `tools\dr2-ext
 `work\bin\<name>`, `work\bin\bin` (retoc) and `tools\acr-mappings\target\release`. `--tools <dir>` adds a folder first.
 In a repo checkout the published exe in `work\bin\launcher` therefore uses `work\` and the developer tool builds; it
 does not build the tools itself (run `scripts\build-stages.ps1` once, or the `dotnet build` lines in CONTRIBUTING.md).
+
+On Linux the layout is the same without `.exe` (`AcrExtraStages`, `tools/<name>/<name>`), packaged as
+`ACR-Extra-Stages-<version>-linux-x64.tar.gz`.
 
 ## What it does
 
@@ -67,6 +80,17 @@ steps run non-interactively as commands; `AcrExtraStages.exe --help` lists them.
    or with `--copy`). **Uninstall** removes `zz_acrxs_*` and the legacy `zz_acrdirt_*` files, nothing else.
 
 Interrupting is safe: the next run skips prepared data and unchanged containers.
+
+### Linux differences
+
+| Step | Windows | Linux |
+|---|---|---|
+| Detect | Steam registry keys | `~/.local/share/Steam`, `~/.steam/{steam,root}`, Flatpak and Snap Steam, then `libraryfolders.vdf` |
+| Preflight: same drive | drive root (`D:\`) | mount point from `/proc/self/mountinfo`, symlinks resolved (`Unix.MountOf`) |
+| Preflight: ACR running | process `acr` / `acr-Win64-Shipping` | a process whose argv[0] is `...\acr.exe` (the Proton game) |
+| Hard links | `CreateHardLinkW` | `link(2)` |
+| Location logos | GDI+ (`Logos.cs`) | SkiaSharp (`Logos.Skia.cs`), fonts through fontconfig |
+| Mappings | `acr-mappings` with `ReadProcessMemory` | `acr-mappings` with `/proc/<pid>/mem` |
 
 ## Developer smoke test (no game install)
 
