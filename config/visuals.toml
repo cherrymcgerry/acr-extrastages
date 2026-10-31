@@ -129,6 +129,20 @@ steep_min_deg = 40
 steep_acr_texture = "/Game/Props/MonteCarloProps/MonBolRockfaces/T_RockSurfaceSbcjgap0_B"   # ACR tileable rock (used
                                  #   instead of the DR2 slice when set; the M_Simple MIC references it)
 steep_tile_m = 4
+# v1.15 ground detail (stage-build --visuals-ground-detail 1, launcher --acr-ground): the ground bake tiles keep DR2's
+# colour and get an ACR detail normal map. M_Simple's detail normal is a static switch, so the MIC is cloned from an ACR
+# MI cooked with it on (MI_MonBolStoneWallB: Simple_Use_Detail_Normal, DetailNormalTiling relative to UV0); its texture
+# slots are listed by their template texture; the detail (and global) normal slot gets detail_normal_texture.
+detail_mic_template = "/Game/Props/MonteCarloProps/MOnBolStoneWallB/MI_MonBolStoneWallB"
+detail_base_texture = "/Game/Props/MonteCarloProps/MOnBolStoneWallB/T_MonBolStoneWallB_B"
+detail_orm_texture = "/Game/Props/MonteCarloProps/MOnBolStoneWallB/T_MonBolStoneWallB_L"
+detail_normal_slot = "/Game/Props/MonteCarloProps/MOnBolStoneWallB/T_MonBolStoneWallB_N"
+detail_detail_slot = "/Game/Props/MonteCarloProps/MOnBolStoneWallB/T_xgixbbt_2K_N"
+detail_normal_texture = "/Game/Environments/MonteCarloShared/TileableMaterialsTextures/T_Moss2_N"
+detail_tiling_param = ["DetailNormalTiling", "2"]          # parameter, template value (patched to tile size / detail_repeat_m)
+detail_unit_scalars = ["Global_ColorIntensity=2"]          # template boosts set to 1 (keep the bake colours)
+detail_unit_vectors = ["Simple_BaseColorTintMultiply=1.4"]
+detail_repeat_m = 2
 # vista: large colour map (tint) x 2 over the three layers' mean colours mixed by the blend map, baked
 vista_colour_map = "nz_ral_master_vista_cm"
 vista_blend_map = "nz_ral_master_vista_mk"

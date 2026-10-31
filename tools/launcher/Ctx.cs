@@ -24,6 +24,10 @@ internal sealed class Ctx
     /// stage-build --native-props: v1.14, DR2's fences, posts, signs, start gantry, timers, cones and rocks as ACR props,
     /// ground grass beside the road and a stony texture on steep banks (implies --native-foliage).
     public bool NativeProps { get; init; }
+    /// v1.15 --acr-ground: the DR2 ground bake tiles get ACR's detail normal (stage-build --visuals-ground-detail).
+    public bool AcrGround { get; init; }
+    /// v1.15 --acr-road: the road uses Hafren's own layered gravel material (stage-build --visuals-dr2-revert road).
+    public bool AcrRoad { get; init; }
     public bool IgnoreDisk { get; init; }
     public bool Copy { get; init; }
     public double? MaxLengthKm { get; init; }

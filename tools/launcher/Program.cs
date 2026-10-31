@@ -36,6 +36,8 @@ internal static class Program
           --native-foliage        DR2's trees, bushes and grasses as ACR's own foliage (experimental; implies --vegetation native)
           --native-props          also DR2's fences, signs, gantries, cones and rocks as ACR props, roadside grass and
                                   rock texture on steep banks (experimental; implies --native-foliage)
+          --acr-ground            ACR detail normal map on the DR2 ground colours (experimental)
+          --acr-road              ACR's layered gravel road material instead of DR2's road texture (experimental)
           --ignore-disk-space     warn instead of stopping when free space is below the estimate
           --root <dir>            folder with config\ and work\ (default: next to the exe / the repo root)
           --tools <dir>           folder with <tool>\<tool>.exe  --yes      accept defaults, never prompt
@@ -92,6 +94,8 @@ internal static class Program
                 KeepTemp = flags.Contains("keep-temp"),
                 NativeFoliage = flags.Contains("native-foliage") || flags.Contains("native-props"),
                 NativeProps = flags.Contains("native-props"),
+                AcrGround = flags.Contains("acr-ground"),
+                AcrRoad = flags.Contains("acr-road"),
                 Vegetation = named.GetValueOrDefault("vegetation") is { } veg
                     ? veg is "none" or "billboards" or "native" ? veg : throw new LauncherException($"--vegetation must be none, billboards or native, not {veg}")
                     : flags.Contains("native-foliage") || flags.Contains("native-props") ? "native" : "none",

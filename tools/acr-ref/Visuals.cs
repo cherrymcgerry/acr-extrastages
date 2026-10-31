@@ -39,7 +39,7 @@ internal static class Visuals
     internal sealed record Options(string Host, bool Retarget, string? Owner, string Vegetation = "none", string? Canopies = null,
                                    bool Vista = false, bool Textured = false, bool Dr2 = false, string Dr2Revert = "",
                                    string TerrainUv = "planar", string Ground = "collision", bool GroundLod = false, string? GroundBake = null,
-                                   bool Steep = false)
+                                   bool Steep = false, bool GroundDetail = false)
     {
         public static Options From(IReadOnlyDictionary<string, string> named) => new(
             named.GetValueOrDefault("visuals-host", "start"),
@@ -55,7 +55,8 @@ internal static class Visuals
             named.GetValueOrDefault("visuals-ground", "collision"),
             named.GetValueOrDefault("visuals-ground-lod", "0") != "0",
             named.GetValueOrDefault("visuals-ground-bake") is { Length: > 0 } gb ? gb : null,
-            named.GetValueOrDefault("visuals-steep", "0") != "0");
+            named.GetValueOrDefault("visuals-steep", "0") != "0",
+            named.GetValueOrDefault("visuals-ground-detail", "0") != "0");
 
         public static readonly string[] Dr2Sections = ["terrain", "road", "vista", "objects"];
 
@@ -228,8 +229,14 @@ internal static class Visuals
             var tiles = GroundLod.LoadTiles(manifest);
             var (used, rest, brep) = GroundLod.Split(terrain, pl, tiles);
             var dir = Path.GetDirectoryName(manifest)!;
+            // v1.15 ground detail: the bake tiles keep their colour and get ACR's detail normal every detail_repeat_m
+            double detailM = opt.GroundDetail ? cfg.Num("dr2_textures", "detail_repeat_m") : 0;
             foreach (var (tile, s) in used)
-                bakeSections.Add(($"terrain:{tile.Name}", s, MatPath(dr2!.Mic("bake_" + tile.Name, dr2.TextureFromFile(Path.Combine(dir, tile.Dds), "ground_bake_" + tile.Name)))));
+            {
+                var tex = dr2!.TextureFromFile(Path.Combine(dir, tile.Dds), "ground_bake_" + tile.Name);
+                bakeSections.Add(($"terrain:{tile.Name}", s, MatPath(opt.GroundDetail ? dr2.DetailMic("bake_" + tile.Name, tex, tile.Size / detailM) : dr2.Mic("bake_" + tile.Name, tex))));
+            }
+            if (opt.GroundDetail) dr2Rep["ground_detail"] = $"{cfg.Str("dr2_textures", "detail_normal_texture")} every {detailM} m on {used.Count} bake tiles";
             terrain = bakeSections[0].s; terrainMat = bakeSections[0].mat;
             bakeSections.RemoveAt(0);
             if (rest.Idx.Count > 0)
@@ -467,12 +474,13 @@ internal static class Visuals
             var parent = Enumerable.Range(0, mp.ImportCount).FirstOrDefault(i => mp.ImportClassName(i) == "Material" && mp.ImportName(i) == (foliage ? "M_TreelineMaster" : "M_Simple")
                                                                                  || mp.ImportName(i) == "UnknownExport", -1);
             bool ok = mp.ExportCount == 1 && mp.ExportClass(0) == "MaterialInstanceConstant" && mp.PackageName == mic && mp.ExportName(0) == mic[(mic.LastIndexOf('/') + 1)..]
-                      && texImports.Count == (foliage ? 2 : 3) && parent >= 0;
+                      && (texImports.Count == (foliage ? 2 : 3) || !foliage && texImports.Count == 4 && opt.GroundDetail) && parent >= 0;
             foreach (var t in texImports)
             {
                 string tp = mp.ImportName(-mp.ImportOuter(t) - 1);
                 // v1.14: the steep-bank MIC may reference a game texture (steep_acr_texture); stage-verify resolves it
                 if (cfg["dr2_textures"].TryGetValue("steep_acr_texture", out var sat) && sat is string sats && tp == sats) continue;
+                if (opt.GroundDetail && tp == cfg.Str("dr2_textures", "detail_normal_texture")) continue;
                 if (!tp.StartsWith(root + "/") || !System.IO.File.Exists(File(tp))) { ok = false; problems.Add($"{mic}: texture {tp} missing"); continue; }
                 if (!textures.Add(tp)) continue;
                 var tpkg = new LegacyPackage(File(tp));

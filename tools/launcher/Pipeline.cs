@@ -182,7 +182,7 @@ internal sealed class Pipeline
                 row.input_hash = Files.HashText(string.Join("|",
                     "spec=" + Files.ContentHash(specs[p.Id].File), "ir=" + Files.FileSig(Path.Combine(ir, "stage.json")),
                     "terrain=" + Files.FileSig(Path.Combine(ir, "render", "terrain.glb")), "bake=" + Files.FileSig(bake),
-                    $"cfg={configSig}", $"tools={toolSig}", $"script={PipelineVersion}", $"vanilla={vanillaSig}", $"vegetation={_c.Vegetation}", $"native-foliage={_c.NativeFoliage}", $"native-props={_c.NativeProps}"));
+                    $"cfg={configSig}", $"tools={toolSig}", $"script={PipelineVersion}", $"vanilla={vanillaSig}", $"vegetation={_c.Vegetation}", $"native-foliage={_c.NativeFoliage}", $"native-props={_c.NativeProps}", $"acr-ground={_c.AcrGround}", $"acr-road={_c.AcrRoad}"));
                 row.status = "todo";
             }
             rows.Add(row);
@@ -373,6 +373,7 @@ internal sealed class Pipeline
             (@"acr/Content/Effects/Vehicles/Skid/T_SkidDebug_N", null),
             (@"acr/Content/Environments/MonteCarloS2Sisteron/TileableMaterials/MI_SisteronConcrete01", null),
             (@"acr/Content/Environments/RallyShared/MaterialInstances/M_Treeline_Wales", null),   // vegetation billboards (foliage_mic_template)
+            (@"acr/Content/Props/MonteCarloProps/MOnBolStoneWallB/MI_MonBolStoneWallB", null),    // ground detail (detail_mic_template)
         };
         foreach (var (rel, filter) in host)
         {
@@ -416,6 +417,8 @@ internal sealed class Pipeline
             "--visuals", cfg("visuals.toml"), "--visuals-host", "start", "--visuals-retarget", "1",
             "--native-foliage", _c.NativeFoliage ? "1" : "0", "--native-props", _c.NativeProps ? "1" : "0",
             "--visuals-steep", _c.NativeProps ? "1" : "0",
+            "--visuals-ground-detail", _c.AcrGround ? "1" : "0",
+            "--visuals-dr2-revert", _c.AcrRoad ? "road" : "",
             "--visuals-vegetation", _c.Vegetation, "--visuals-vista", "1", "--visuals-textured", "1",
             "--visuals-dr2", "1", "--visuals-canopies", "apex", "--visuals-terrain-uv", "box",
             "--visuals-ground", "render", "--visuals-ground-lod", "1",

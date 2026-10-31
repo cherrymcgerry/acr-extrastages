@@ -251,6 +251,77 @@ internal sealed class Dr2Materials
         return _mics[name] = path;
     }
 
+    /// v1.15: a ground MIC with ACR detail: cloned from [dr2_textures] detail_mic_template (an M_Simple child cooked with
+    /// Simple_Use_Detail_Normal): base colour = the given texture (DR2 ground bake tile), flat ORM and base normal, the
+    /// detail (and global) normal = detail_normal_texture (an ACR texture, referenced), DetailNormalTiling = repeats
+    /// across UV 0..1, and the template's colour boosts (detail_unit_scalars, detail_unit_vectors) set to 1.
+    public string DetailMic(string name, string baseColor, double repeats)
+    {
+        if (_mics.TryGetValue(name, out var known)) return known;
+        var tpl = _cfg.Str("dr2_textures", "detail_mic_template");
+        var pkg = new LegacyPackage(LegacyFile(tpl));
+        var path = $"{_root}/Mat/MI_{Clean(name)}";
+        void Rename(string from, string to)
+        {
+            int i = pkg.FindName(from);
+            if (i < 0) throw new InvalidDataException($"{tpl}: name {from} not found");
+            pkg.RenameName(i, to);
+        }
+        string Obj(string p) => p[(p.LastIndexOf('/') + 1)..];
+        foreach (var (key, tex) in new[] { ("detail_base_texture", baseColor), ("detail_orm_texture", Orm()), ("detail_normal_slot", Normal()),
+                                           ("detail_detail_slot", _cfg.Str("dr2_textures", "detail_normal_texture")) })
+        {
+            var old = _cfg.Str("dr2_textures", key);
+            int imp = Enumerable.Range(0, pkg.ImportCount).Single(i => pkg.ImportName(i) == Obj(old) && pkg.ImportClassName(i) == "Texture2D");
+            Rename(pkg.ImportName(-pkg.ImportOuter(imp) - 1), tex);
+            Rename(Obj(old), Obj(tex));
+        }
+        var data = pkg.GetExportData(0);
+        // a parameter's value follows its FName (index, number 0) within the struct: the first float(s) equal to the
+        // template's value there are replaced
+        void Patch(string param, float[] old, float[] now)
+        {
+            int ni = pkg.FindName(param);
+            if (ni < 0) throw new InvalidDataException($"{tpl}: parameter {param} not in the name map");
+            var key = new byte[8];
+            BinaryPrimitives.WriteInt32LittleEndian(key, ni);
+            int patched = 0;
+            for (int at = data.AsSpan().IndexOf(key); at >= 0;)
+            {
+                for (int k = at + 8; k + 4 * old.Length <= Math.Min(data.Length, at + 48); k++)
+                    if (Enumerable.Range(0, old.Length).All(j => BinaryPrimitives.ReadSingleLittleEndian(data.AsSpan(k + 4 * j)) == old[j]))
+                    {
+                        for (int j = 0; j < now.Length; j++) BinaryPrimitives.WriteSingleLittleEndian(data.AsSpan(k + 4 * j), now[j]);
+                        patched++; break;
+                    }
+                int next = data.AsSpan(at + 1).IndexOf(key);
+                at = next < 0 ? -1 : at + 1 + next;
+            }
+            // cooked MICs repeat a parameter (ScalarParameterValues and cached copies): every copy holding the value is patched
+            if (patched == 0) throw new InvalidDataException($"{tpl}: parameter {param}: value {string.Join(",", old)} not found");
+        }
+        var tiling = _cfg.Arr("dr2_textures", "detail_tiling_param").Select(Convert.ToString).ToArray();
+        Patch(tiling[0]!, [float.Parse(tiling[1]!, System.Globalization.CultureInfo.InvariantCulture)], [(float)repeats]);
+        foreach (var s in _cfg.Arr("dr2_textures", "detail_unit_scalars").Cast<string>())
+        {
+            var p = s.Split('=');
+            Patch(p[0], [float.Parse(p[1], System.Globalization.CultureInfo.InvariantCulture)], [1f]);
+        }
+        foreach (var s in _cfg.Arr("dr2_textures", "detail_unit_vectors").Cast<string>())
+        {
+            var p = s.Split('=');
+            float f = float.Parse(p[1], System.Globalization.CultureInfo.InvariantCulture);
+            Patch(p[0], [f, f, f], [1f, 1f, 1f]);
+        }
+        pkg.SetExportData(0, data);
+        Rename(pkg.ExportName(0), Obj(path));
+        Rename(pkg.PackageName, path);
+        pkg.SetPackageName(path);
+        pkg.SaveTo(Path.Combine(_outRoot, "acr", "Content", path["/Game/".Length..].Replace('/', Path.DirectorySeparatorChar) + ".uasset"));
+        Log.Add($"{path}: base colour {baseColor}, ACR detail normal x {repeats:0.#}");
+        return _mics[name] = path;
+    }
+
     // ---- stand-in textures for stages whose location is not the one config/visuals.toml names ----------------------------
 
     bool Usable(string name)
