@@ -92,7 +92,6 @@ internal static class NativeFoliage
         using var provider = Program.Open(o);
         var meshes = new Dictionary<string, MeshInfo>();
         foreach (var path in rules.SelectMany(r => r.Meshes).Distinct()) meshes[path] = LoadMesh(provider, path);
-        if (meshes.Count > hosts.Count) throw new ArgumentException($"[native_foliage] {meshes.Count} meshes but only {hosts.Count} host components");
 
         // DR2 template bounds (template space, metres; Y up)
         var tb = new Dictionary<string, (double h, double w)>();
@@ -113,9 +112,22 @@ internal static class NativeFoliage
         var ground = new SurfaceGrid(Path.Combine(ir.Dir, "collision.glb"), pl);
         var plants = meshes.Keys.ToDictionary(k => k, _ => new List<Plant>());
         var perRule = new Dictionary<string, (int dr2, int placed)>();
-        int onRoad = 0, noGround = 0;
+        int onRoad = 0, noGround = 0, pushed = 0, crownOnRoad = 0;
         var centre = ir.Centre.Select(pl.ToUe).ToList();
         double NearCentre(V3 p) => centre.Min(c => (c.X - p.X) * (c.X - p.X) + (c.Y - p.Y) * (c.Y - p.Y));
+        V3 Nearest(V3 p) => centre.MinBy(c => (c.X - p.X) * (c.X - p.X) + (c.Y - p.Y) * (c.Y - p.Y));
+        var scaleRange = cfg["native_foliage"].TryGetValue("scale_range", out var srv) && srv is object[] sra ? ((double)sra[0], (double)sra[1]) : (0.3, 3.0);
+        // crown clearance: this fraction of the plant's plan radius (low plants / trees taller than tall_m) stays off
+        // road surfaces; a plant that touches the road is pushed straight away from the centreline, else dropped
+        double Opt(string k, double d) => cfg["native_foliage"].TryGetValue(k, out var v) && v is double x ? x : d;
+        double crownLow = Opt("crown_clearance_low", 0.8), crownTall = Opt("crown_clearance_tall", 0.45), tallCm = Opt("tall_m", 8) * 100;
+        bool CrownOff(V3 at, double rad)
+        {
+            if (objs.Probe.OnRoadSurface(at.X, at.Y)) return false;
+            for (int i = 0; i < 8; i++)
+                if (objs.Probe.OnRoadSurface(at.X + rad * Math.Cos(i * Math.PI / 4), at.Y + rad * Math.Sin(i * Math.PI / 4))) return false;
+            return true;
+        }
         foreach (var inst in JsonNode.Parse(File.ReadAllText(Path.Combine(ir.Dir, "stage.json")))!["objects"]!["instances"]!.AsArray())
         {
             var tname = inst!["template"]!.GetValue<string>();
@@ -128,7 +140,7 @@ internal static class NativeFoliage
             var rng = new Random((int)(Hash(id) & 0x7FFFFFFF));
             var mesh = meshes[rule.Meshes[(int)(Hash(id) % (ulong)rule.Meshes.Length)]];
             double h = size.h * s * 100, w = size.w * s * 100;
-            double sz = Math.Clamp(h / mesh.Height, 0.3, 3);
+            double sz = Math.Clamp(h / mesh.Height, scaleRange.Item1, scaleRange.Item2);
             int count = rule.MaxPerPlant <= 1 ? 1 : Math.Clamp((int)Math.Round(w / (mesh.Width * sz)), 1, rule.MaxPerPlant);
             var c0 = pl.ToUe(pos);
             var pr = perRule.GetValueOrDefault(rule.Text);
@@ -138,6 +150,19 @@ internal static class NativeFoliage
                 double r = count == 1 ? 0 : Math.Max(0, w / 2 - mesh.Width * sz / 2) * Math.Sqrt(rng.NextDouble()), a = rng.NextDouble() * 2 * Math.PI;
                 var at = new V3(c0.X + r * Math.Cos(a), c0.Y + r * Math.Sin(a), c0.Z);
                 if (objs.Probe.OnRoadSurface(at.X, at.Y) || Math.Sqrt(NearCentre(at)) < minOffset) { onRoad++; continue; }
+                double rad = mesh.Width / 2 * sz * (mesh.Height * sz > tallCm ? crownTall : crownLow);
+                if (!CrownOff(at, rad))
+                {
+                    var nc = Nearest(at); var away = new V3(at.X - nc.X, at.Y - nc.Y, 0);
+                    double al = away.Length;
+                    var dir = al > 1 ? away * (1 / al) : new V3(1, 0, 0);
+                    bool ok = false;
+                    for (double step = 50; step <= rad + 50 && !ok; step += 50)
+                        if (CrownOff(at + dir * step, rad)) { at = at + dir * step; ok = true; }
+                    if (!ok) { crownOnRoad++; continue; }
+                    pushed++;
+                    if (ground.HeightAt(at.X / 100, at.Y / 100) is { } py) at = at with { Z = py * 100 };
+                }
                 if (count > 1)
                 {
                     if (ground.HeightAt(at.X / 100, at.Y / 100) is not { } gy) { noGround++; continue; }
@@ -150,7 +175,11 @@ internal static class NativeFoliage
             }
         }
 
-        // hosts: one mesh each, in config order (most plants first)
+        // hosts: one mesh each, in config order (most plants first); rules for other locations place nothing here
+        int usedMeshes = plants.Count(kv => kv.Value.Count > 0);
+        if (usedMeshes > hosts.Count)
+            throw new ArgumentException($"[native_foliage] {usedMeshes} meshes have plants on this stage but only {hosts.Count} host components: " +
+                                        string.Join(", ", plants.Where(kv => kv.Value.Count > 0).Select(kv => $"{meshes[kv.Key].Name} x {kv.Value.Count}")));
         var pkg = new LegacyPackage(persistentFile);
         var exports = provider.LoadPackage("acr/Content/Levels/WalesS4HafrenSouth.umap").GetExports().ToList();
         if (exports.Count != pkg.ExportCount) throw new InvalidDataException("CUE4Parse export count differs from the legacy persistent level");
@@ -173,11 +202,11 @@ internal static class NativeFoliage
         }
         pkg.SaveTo(persistentFile);
         int total = plants.Values.Sum(l => l.Count);
-        Console.WriteLine($"native foliage: {total} ACR plants ({plants.Count(kv => kv.Value.Count > 0)} meshes) from DR2 vegetation, {onRoad} dropped on or near the road");
+        Console.WriteLine($"native foliage: {total} ACR plants ({plants.Count(kv => kv.Value.Count > 0)} meshes) from DR2 vegetation, {onRoad + crownOnRoad} dropped on or near the road, {pushed} pushed off it");
         return new JsonObject
         {
             ["plants"] = total,
-            ["dropped_on_road_or_near_centreline"] = onRoad, ["dropped_no_ground"] = noGround,
+            ["dropped_on_road_or_near_centreline"] = onRoad, ["pushed_off_road"] = pushed, ["dropped_crown_over_road"] = crownOnRoad, ["dropped_no_ground"] = noGround,
             ["hosts"] = used,
             ["rules"] = new JsonObject(perRule.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)$"{kv.Value.dr2} DR2 plants -> {kv.Value.placed} ACR plants"))),
         };

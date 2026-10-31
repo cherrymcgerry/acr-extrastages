@@ -283,6 +283,8 @@ internal static class ObjectColliders
                     var centre = pl.ToUe([o.X, o.Y, o.Z]);
                     var phys = pl.ToPhysics(o.X, o.Y, o.Z);
                     if (!inPhysicsBounds(phys)) { outside++; continue; }
+                    // a few DR2 instances have a zero scale (hidden placeholders): no collider
+                    if (Math.Min(ex.Length(), Math.Min(ey.Length(), ez.Length())) < 1e-4f) { Skip("zero scale"); continue; }
                     V3 ux = Dir(pl, ex), uy = Dir(pl, ey), uz = Dir(pl, ez);
 
                     var s = new Shape { Material = wall, Template = tname, Instance = inst["id"]!.GetValue<string>(), Kind = kind };
