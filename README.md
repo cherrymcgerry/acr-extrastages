@@ -133,6 +133,9 @@ you, and is never redistributed here.
 - **Windows and Linux.** Only the Steam release of ACR is tested. On Linux the game runs through
   Proton; tested on Bazzite with the native Steam client (see [docs/linux.md](docs/linux.md)).
 - Stages are for **offline** play only.
+- **ACR assets (experimental).** `--native-props --acr-ground --acr-road` replace DR2's vegetation, objects, ground
+  detail and road with Assetto Corsa Rally's own assets; so far tuned for New Zealand only (see
+  [docs/native-assets.md](docs/native-assets.md)).
 
 ## Troubleshooting
 

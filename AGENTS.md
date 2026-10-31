@@ -107,9 +107,11 @@ Texture2D + MaterialInstanceConstant packages cloned from cooked templates (Drop
 
 ## Status (2026-11-01)
 
-- `linux-port`: Linux support, draft PR cherrymcgerry/acr-extrastages#1 (CI on the fork needs Actions enabled once).
-- `visual-preview`: preview tool, billboards (`--vegetation billboards`, works but dark), native foliage
-  (`--native-foliage`): full mapping (about 19,900 plants, 8 ACR meshes) confirmed good in game.
-- Native props (`--native-props`): 1,162 wire fence + 165 log fence panels, 107 boulders, 235 single props (gantries,
-  timers, signs, tape poles, markers, posts, cones), 11.5k grass clumps, stony steep banks. Built and verified
-  offline (40/40); **in-game check pending** (sign facing may be 180 degrees off: no front/back known per mesh).
+- `linux-port`: Linux support, PR cherrymcgerry/acr-extrastages#1.
+- `visual-preview` (stacked on it): preview tool, billboards (`--vegetation billboards`, dark), native foliage
+  (`--native-foliage`), native props (`--native-props`), ACR ground detail (`--acr-ground`) and road (`--acr-road`).
+  User docs: docs/native-assets.md. **Tuned and checked in game on New Zealand (AcrXsNz01r5) only.** Scotland rules
+  (8 stages build) are untested in game.
+- Open: road texture stripes on some NZ sections with the DR2 road (the ACR road replaces it), small ground holes on
+  banks, steep-bank texture still streaky where box projection switches axis, ground colour resolution (DR2 bake,
+  about 14 cm/px), single props facing (front/back unknown), ACR gantry branding (Wales).
