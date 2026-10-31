@@ -182,7 +182,7 @@ internal sealed class Pipeline
                 row.input_hash = Files.HashText(string.Join("|",
                     "spec=" + Files.ContentHash(specs[p.Id].File), "ir=" + Files.FileSig(Path.Combine(ir, "stage.json")),
                     "terrain=" + Files.FileSig(Path.Combine(ir, "render", "terrain.glb")), "bake=" + Files.FileSig(bake),
-                    $"cfg={configSig}", $"tools={toolSig}", $"script={PipelineVersion}", $"vanilla={vanillaSig}", $"vegetation={_c.Vegetation}", $"native-foliage={_c.NativeFoliage}"));
+                    $"cfg={configSig}", $"tools={toolSig}", $"script={PipelineVersion}", $"vanilla={vanillaSig}", $"vegetation={_c.Vegetation}", $"native-foliage={_c.NativeFoliage}", $"native-props={_c.NativeProps}"));
                 row.status = "todo";
             }
             rows.Add(row);
@@ -414,7 +414,8 @@ internal sealed class Pipeline
             "--respawn", "relay",
             "--scenery", cfg("scenery.toml"), "--scenery-actor-hidden", "1",
             "--visuals", cfg("visuals.toml"), "--visuals-host", "start", "--visuals-retarget", "1",
-            "--native-foliage", _c.NativeFoliage ? "1" : "0",
+            "--native-foliage", _c.NativeFoliage ? "1" : "0", "--native-props", _c.NativeProps ? "1" : "0",
+            "--visuals-steep", _c.NativeProps ? "1" : "0",
             "--visuals-vegetation", _c.Vegetation, "--visuals-vista", "1", "--visuals-textured", "1",
             "--visuals-dr2", "1", "--visuals-canopies", "apex", "--visuals-terrain-uv", "box",
             "--visuals-ground", "render", "--visuals-ground-lod", "1",

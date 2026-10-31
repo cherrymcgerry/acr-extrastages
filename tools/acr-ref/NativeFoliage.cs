@@ -29,7 +29,7 @@ namespace AcrRef;
 ///     breadth-first, children contiguous, instances stored in tree order.
 internal static class NativeFoliage
 {
-    sealed record MeshInfo(string Path, string Name, V3 Origin, V3 Extent, double Radius)
+    internal sealed record MeshInfo(string Path, string Name, V3 Origin, V3 Extent, double Radius)
     {
         public double Height => Extent.Z * 2;
         public double Width => Math.Max(Extent.X, Extent.Y) * 2;
@@ -37,8 +37,24 @@ internal static class NativeFoliage
 
     sealed record Rule(Regex Template, string[] Meshes, int MaxPerPlant, string Text);
 
-    /// One plant to place: world UE position (cm, on the ground), yaw (deg), horizontal and vertical scale.
-    readonly record struct Plant(V3 At, double Yaw, double Sxy, double Sz);
+    /// One instance to place: world UE position of the mesh pivot (cm) and the world images of the mesh's local X, Y
+    /// and Z unit axes (rotation times scale; must keep the handedness: (X x Y) . Z > 0).
+    internal readonly record struct Plant(V3 At, V3 Ax, V3 Ay, V3 Az)
+    {
+        public static Plant Yawed(V3 at, double yawDeg, double sxy, double sz)
+        {
+            double c = Math.Cos(yawDeg * Math.PI / 180), s = Math.Sin(yawDeg * Math.PI / 180);
+            return new(at, new V3(c * sxy, s * sxy, 0), new V3(-s * sxy, c * sxy, 0), new V3(0, 0, sz));
+        }
+    }
+
+    internal static MeshInfo LoadMesh(CUE4Parse.FileProvider.IFileProvider provider, string path)
+    {
+        var mesh = provider.LoadPackage("acr/Content" + path["/Game".Length..] + ".uasset").GetExports().OfType<UStaticMesh>().First();
+        var b = mesh.RenderData!.Bounds!;
+        return new MeshInfo(path, path[(path.LastIndexOf('/') + 1)..], new V3(b.Origin.X, b.Origin.Y, b.Origin.Z),
+                            new V3(b.BoxExtent.X, b.BoxExtent.Y, b.BoxExtent.Z), b.SphereRadius);
+    }
 
     static List<Rule> Rules(Toml cfg) => cfg.Arr("native_foliage", "species").Cast<string>().Select(s =>
     {
@@ -72,13 +88,7 @@ internal static class NativeFoliage
 
         using var provider = Program.Open(o);
         var meshes = new Dictionary<string, MeshInfo>();
-        foreach (var path in rules.SelectMany(r => r.Meshes).Distinct())
-        {
-            var mesh = provider.LoadPackage("acr/Content" + path["/Game".Length..] + ".uasset").GetExports().OfType<UStaticMesh>().First();
-            var b = mesh.RenderData!.Bounds!;
-            meshes[path] = new MeshInfo(path, path[(path.LastIndexOf('/') + 1)..], new V3(b.Origin.X, b.Origin.Y, b.Origin.Z),
-                                        new V3(b.BoxExtent.X, b.BoxExtent.Y, b.BoxExtent.Z), b.SphereRadius);
-        }
+        foreach (var path in rules.SelectMany(r => r.Meshes).Distinct()) meshes[path] = LoadMesh(provider, path);
         if (meshes.Count > hosts.Count) throw new ArgumentException($"[native_foliage] {meshes.Count} meshes but only {hosts.Count} host components");
 
         // DR2 template bounds (template space, metres; Y up)
@@ -131,7 +141,7 @@ internal static class NativeFoliage
                     at = at with { Z = gy * 100 };
                 }
                 double v = 0.85 + 0.3 * rng.NextDouble();
-                plants[mesh.Path].Add(new Plant(at with { Z = at.Z - 10 }, rng.NextDouble() * 360, sz * v, sz * v));
+                plants[mesh.Path].Add(Plant.Yawed(at with { Z = at.Z - 10 }, rng.NextDouble() * 360, sz * v, sz * v));
                 pr = perRule[rule.Text];
                 perRule[rule.Text] = (pr.dr2, pr.placed + 1);
             }
@@ -144,25 +154,18 @@ internal static class NativeFoliage
         int none = pkg.AddExportName("None");
         var used = new JsonArray();
         int hi = 0;
+        var dropTags = cfg.Arr("native_foliage", "drop_tags").Cast<string>().ToList();
         foreach (var (path, list) in plants.Where(kv => kv.Value.Count > 0).OrderByDescending(kv => kv.Value.Count))
         {
             var (actorName, compName) = hosts[hi++];
-            int e = Enumerable.Range(0, pkg.ExportCount).Single(i => pkg.ExportName(i) == compName && pkg.ExportName(pkg.ExportOuter(i) - 1) == actorName);
-            var comp = JsonNode.Parse(JsonConvert.SerializeObject(exports[e]))!;
-            var root = exports.Single(x => x.Name == "DefaultSceneRoot" && x.Outer?.Name.ToString() == actorName);
-            var rootProps = JsonNode.Parse(JsonConvert.SerializeObject(root))!["Properties"]!;
-            Rewrite(pkg, e, comp, rootProps, meshes[path], list, leaf);
-            DropTags(pkg, pkg.ExportOuter(e) - 1, cfg.Arr("native_foliage", "drop_tags").Cast<string>(), none, actorName);
+            RewriteHost(pkg, exports, actorName, compName, meshes[path], list, leaf, dropTags, none);
             used.Add($"{actorName}/{compName}: {meshes[path].Name} x {list.Count}");
         }
         // hosts left over keep no instances visible: their actor is kept visible only if another host of it is used
         for (; hi < hosts.Count; hi++)
         {
             var (actorName, compName) = hosts[hi];
-            int e = Enumerable.Range(0, pkg.ExportCount).Single(i => pkg.ExportName(i) == compName && pkg.ExportName(pkg.ExportOuter(i) - 1) == actorName);
-            var comp = JsonNode.Parse(JsonConvert.SerializeObject(exports[e]))!;
-            var root = exports.Single(x => x.Name == "DefaultSceneRoot" && x.Outer?.Name.ToString() == actorName);
-            Rewrite(pkg, e, comp, JsonNode.Parse(JsonConvert.SerializeObject(root))!["Properties"]!, null, [], leaf);
+            RewriteHost(pkg, exports, actorName, compName, null, [], leaf, [], none);
             used.Add($"{actorName}/{compName}: unused (0 instances)");
         }
         pkg.SaveTo(persistentFile);
@@ -177,7 +180,19 @@ internal static class NativeFoliage
         };
     }
 
-    static void DropTags(LegacyPackage pkg, int actor, IEnumerable<string> tags, int none, string actorName)
+    /// Rebuilds host component compName of stamp actor actorName with the given instances (mesh null: none) and
+    /// renames the drop tags on its actor (none: the "None" name index).
+    internal static void RewriteHost(LegacyPackage pkg, List<CUE4Parse.UE4.Assets.Exports.UObject> exports, string actorName, string compName,
+                                     MeshInfo? mesh, List<Plant> list, int leaf, IEnumerable<string> dropTags, int none)
+    {
+        int e = Enumerable.Range(0, pkg.ExportCount).Single(i => pkg.ExportName(i) == compName && pkg.ExportName(pkg.ExportOuter(i) - 1) == actorName);
+        var comp = JsonNode.Parse(JsonConvert.SerializeObject(exports[e]))!;
+        var root = exports.Single(x => x.Name == "DefaultSceneRoot" && x.Outer?.Name.ToString() == actorName);
+        Rewrite(pkg, e, comp, JsonNode.Parse(JsonConvert.SerializeObject(root))!["Properties"]!, mesh, list, leaf);
+        DropTags(pkg, pkg.ExportOuter(e) - 1, dropTags, none, actorName);
+    }
+
+    internal static void DropTags(LegacyPackage pkg, int actor, IEnumerable<string> tags, int none, string actorName)
     {
         foreach (var tag in tags)
         {
@@ -190,7 +205,7 @@ internal static class NativeFoliage
         }
     }
 
-    static List<int> Find(byte[] d, byte[] pat, int from = 0, int to = int.MaxValue)
+    internal static List<int> Find(byte[] d, byte[] pat, int from = 0, int to = int.MaxValue)
     {
         var hits = new List<int>();
         int i = d.AsSpan(from).IndexOf(pat);
@@ -204,23 +219,23 @@ internal static class NativeFoliage
         return hits;
     }
 
-    static byte[] Ints(params int[] v)
+    internal static byte[] Ints(params int[] v)
     {
         var b = new byte[v.Length * 4];
         for (int i = 0; i < v.Length; i++) BinaryPrimitives.WriteInt32LittleEndian(b.AsSpan(i * 4), v[i]);
         return b;
     }
 
-    static byte[] Doubles(params double[] v)
+    internal static byte[] Doubles(params double[] v)
     {
         var b = new byte[v.Length * 8];
         for (int i = 0; i < v.Length; i++) BinaryPrimitives.WriteDoubleLittleEndian(b.AsSpan(i * 8), v[i]);
         return b;
     }
 
-    static double[] Vec(JsonNode v) => [v["X"]!.GetValue<double>(), v["Y"]!.GetValue<double>(), v["Z"]!.GetValue<double>()];
+    internal static double[] Vec(JsonNode v) => [v["X"]!.GetValue<double>(), v["Y"]!.GetValue<double>(), v["Z"]!.GetValue<double>()];
 
-    static List<int> FindDoubles(byte[] d, double[] vals, int to)
+    internal static List<int> FindDoubles(byte[] d, double[] vals, int to)
     {
         var hits = new List<int>();
         for (int i = 0; i + vals.Length * 8 <= Math.Min(d.Length, to); i++)
@@ -276,6 +291,7 @@ internal static class NativeFoliage
             throw new InvalidDataException("stamp root is pitched, rolled or scaled; only translation + yaw is supported");
         double rc = Math.Cos(rootYaw * Math.PI / 180), rs = Math.Sin(rootYaw * Math.PI / 180);
         V3 ToLocal(V3 w) { var q = w - rootLoc; return new(rc * q.X + rs * q.Y, -rs * q.X + rc * q.Y, q.Z); }
+        V3 DirLocal(V3 q) => new(rc * q.X + rs * q.Y, -rs * q.X + rc * q.Y, q.Z);
         V3 ToWorld(V3 l) => new V3(rc * l.X - rs * l.Y, rs * l.X + rc * l.Y, l.Z) + rootLoc;
 
         // instances (local), their bounds, then the tree (instances reordered into tree order)
@@ -286,13 +302,18 @@ internal static class NativeFoliage
         {
             var p = plants[k];
             var l = ToLocal(p.At);
-            double yaw = (p.Yaw - rootYaw) * Math.PI / 180, c = Math.Cos(yaw), s = Math.Sin(yaw);
-            mats[k] = [c * p.Sxy, s * p.Sxy, 0, 0, -s * p.Sxy, c * p.Sxy, 0, 0, 0, 0, p.Sz, 0, l.X, l.Y, l.Z, 1];
-            double rxy = Math.Sqrt(mesh!.Extent.X * mesh.Extent.X + mesh.Extent.Y * mesh.Extent.Y) * p.Sxy;
-            double ox = mesh.Origin.X * c * p.Sxy - mesh.Origin.Y * s * p.Sxy, oy = mesh.Origin.X * s * p.Sxy + mesh.Origin.Y * c * p.Sxy;
-            bmin[k] = new Vector3((float)(l.X + ox - rxy), (float)(l.Y + oy - rxy), (float)(l.Z + (mesh.Origin.Z - mesh.Extent.Z) * p.Sz));
-            bmax[k] = new Vector3((float)(l.X + ox + rxy), (float)(l.Y + oy + rxy), (float)(l.Z + (mesh.Origin.Z + mesh.Extent.Z) * p.Sz));
-            scl[k] = new Vector3((float)p.Sxy, (float)p.Sxy, (float)p.Sz);
+            V3 ax = DirLocal(p.Ax), ay = DirLocal(p.Ay), az = DirLocal(p.Az);
+            mats[k] = [ax.X, ax.Y, ax.Z, 0, ay.X, ay.Y, ay.Z, 0, az.X, az.Y, az.Z, 0, l.X, l.Y, l.Z, 1];
+            // instance bounds: the 8 corners of the mesh box, transformed
+            var lo = new Vector3(float.MaxValue); var hi = new Vector3(float.MinValue);
+            foreach (var sx in new[] { -1, 1 }) foreach (var sy in new[] { -1, 1 }) foreach (var sz2 in new[] { -1, 1 })
+            {
+                double qx = mesh!.Origin.X + sx * mesh.Extent.X, qy = mesh.Origin.Y + sy * mesh.Extent.Y, qz = mesh.Origin.Z + sz2 * mesh.Extent.Z;
+                var w = new Vector3((float)(l.X + ax.X * qx + ay.X * qy + az.X * qz), (float)(l.Y + ax.Y * qx + ay.Y * qy + az.Y * qz), (float)(l.Z + ax.Z * qx + ay.Z * qy + az.Z * qz));
+                lo = Vector3.Min(lo, w); hi = Vector3.Max(hi, w);
+            }
+            bmin[k] = lo; bmax[k] = hi;
+            scl[k] = new Vector3((float)ax.Length, (float)ay.Length, (float)az.Length);
         }
         var order = Enumerable.Range(0, n).ToArray();
         var nodes = new List<Node>();

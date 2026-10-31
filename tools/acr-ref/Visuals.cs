@@ -38,7 +38,8 @@ internal static class Visuals
     ///        section, texture and MIC per tile, tile UVs (GroundLod.Split); null = one terrain section, box UVs
     internal sealed record Options(string Host, bool Retarget, string? Owner, string Vegetation = "none", string? Canopies = null,
                                    bool Vista = false, bool Textured = false, bool Dr2 = false, string Dr2Revert = "",
-                                   string TerrainUv = "planar", string Ground = "collision", bool GroundLod = false, string? GroundBake = null)
+                                   string TerrainUv = "planar", string Ground = "collision", bool GroundLod = false, string? GroundBake = null,
+                                   bool Steep = false)
     {
         public static Options From(IReadOnlyDictionary<string, string> named) => new(
             named.GetValueOrDefault("visuals-host", "start"),
@@ -53,7 +54,8 @@ internal static class Visuals
             named.GetValueOrDefault("visuals-terrain-uv", "planar"),
             named.GetValueOrDefault("visuals-ground", "collision"),
             named.GetValueOrDefault("visuals-ground-lod", "0") != "0",
-            named.GetValueOrDefault("visuals-ground-bake") is { Length: > 0 } gb ? gb : null);
+            named.GetValueOrDefault("visuals-ground-bake") is { Length: > 0 } gb ? gb : null,
+            named.GetValueOrDefault("visuals-steep", "0") != "0");
 
         public static readonly string[] Dr2Sections = ["terrain", "road", "vista", "objects"];
 
@@ -86,7 +88,8 @@ internal static class Visuals
     }
 
     public static JsonObject Build(LegacyPackage cell, StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, Options opt,
-                                   ObjectColliders.Result? objects, Func<Splines.V3, bool> inPhysicsBounds, Dr2Materials? dr2 = null)
+                                   ObjectColliders.Result? objects, Func<Splines.V3, bool> inPhysicsBounds, Dr2Materials? dr2 = null,
+                                   ISet<string>? nativeProps = null, bool hideMarkers = false)
     {
         var r = new JsonObject();
         if (opt.Dr2 && (dr2 is null || !opt.Textured)) throw new ArgumentException("--visuals-dr2 needs --visuals-textured and the DR2 material writer");
@@ -146,7 +149,7 @@ internal static class Visuals
         var postCentres = new JsonArray();
         foreach (var g in ir.Gates)
         {
-            if (g.distance < next) continue;
+            if (hideMarkers || g.distance < next) continue;
             next = g.distance + spacing;
             foreach (var edge in new[] { g.left, g.right })
             {
@@ -158,7 +161,9 @@ internal static class Visuals
             }
         }
         double gh = cfg.Num("markers", "gate_height_m") * 100;
-        foreach (var type in new[] { "start", "finish" })
+        // v1.14 hideMarkers (native props): ACR's gantries stand at DR2's start/finish arches; posts and gates are one
+        // tiny triangle each, 50 m below the start, so the section layout stays the same
+        foreach (var type in hideMarkers ? [] : new[] { "start", "finish" })
         {
             var tm = ir.Timing.First(t => t.type == type);
             var g = ir.Gates[tm.gate];
@@ -177,6 +182,11 @@ internal static class Visuals
         var d0 = new Vector3((float)start.X, (float)start.Y, (float)start.Z - 5000);
         foreach (var off in new[] { Vector3.Zero, new Vector3(1, 0, 0), new Vector3(0, 1, 0) }) { dummy.Pos.Add(d0 + off); dummy.Nrm.Add(Vector3.UnitZ); dummy.Uv.Add(Vector2.Zero); }
         dummy.Idx.AddRange([0u, 2u, 1u]);
+        foreach (var s in new[] { posts, gates }.Where(s => s.Idx.Count == 0))
+        {
+            for (int i = 0; i < 3; i++) { s.Pos.Add(dummy.Pos[i]); s.Nrm.Add(Vector3.UnitZ); s.Uv.Add(Vector2.Zero); }
+            s.Idx.AddRange([0u, 2u, 1u]);
+        }
 
         var imported = new Dictionary<string, int>();
         int MatPath(string path)
@@ -203,6 +213,18 @@ internal static class Visuals
         {
             // section 1 = the first tile, further tiles after the gates; triangles over no tile keep the grass slice below
             if (!opt.Dr2On("terrain") || opt.Ground != "render") throw new ArgumentException("--visuals-ground-bake needs --visuals-dr2 (terrain not reverted) and --visuals-ground render");
+            // v1.14 steep: faces steeper than steep_min_deg leave the top-down bake (streaks there) for a stony DR2 detail
+            // slice, box-projected
+            ProcMesh.Section? steepSec = null;
+            if (opt.Steep)
+            {
+                double cosMax = Math.Cos(cfg.Num("dr2_textures", "steep_min_deg") * Math.PI / 180);
+                (terrain, steepSec) = SplitTriangles(terrain, (a, b, c) =>
+                {
+                    var n = Vector3.Cross(b - a, c - a); float l = n.Length();
+                    return l > 0 && Math.Abs(n.Z / l) < cosMax;
+                });
+            }
             var tiles = GroundLod.LoadTiles(manifest);
             var (used, rest, brep) = GroundLod.Split(terrain, pl, tiles);
             var dir = Path.GetDirectoryName(manifest)!;
@@ -214,6 +236,12 @@ internal static class Visuals
             {
                 dr2Rep["terrain_uv"] = BoxUv(rest, (float)(cfg.Num("dr2_textures", "terrain_tile_m") * 100));
                 bakeSections.Add(("terrain:rest", rest, MatPath(dr2!.Mic("terrain", dr2.Texture(dr2.TerrainTexture)))));
+            }
+            if (steepSec is { Idx.Count: > 0 })
+            {
+                dr2Rep["steep_uv"] = BoxUv(steepSec, (float)(cfg.Num("dr2_textures", "terrain_tile_m") * 100));
+                bakeSections.Add(("terrain:steep", steepSec, MatPath(dr2!.Mic("steep", dr2.Texture(dr2.SteepTexture)))));
+                dr2Rep["steep"] = $"{steepSec.Idx.Count / 3} triangles steeper than {cfg.Num("dr2_textures", "steep_min_deg")} deg on {dr2.SteepTexture}";
             }
             dr2Rep["terrain"] = $"ground bake {manifest}: {used.Count} tile sections" + (rest.Idx.Count > 0 ? $", {rest.Idx.Count / 3} triangles over no tile on {dr2!.TerrainTexture}" : "");
             dr2Rep["ground_bake"] = brep;
@@ -266,7 +294,7 @@ internal static class Visuals
             }
             var (objSecs, objRep) = VisualObjects.Build(ir, pl, cfg, objects, inPhysicsBounds, opt.Vegetation, opt.Canopies,
                                                         objJson is null ? null : m => Diffuse(m) is not null,
-                                                        opt.Vegetation == "billboards" && dr2 is not null ? Frames : null);
+                                                        opt.Vegetation == "billboards" && dr2 is not null ? Frames : null, nativeProps);
             foreach (var cls in VisualObjects.Classes.Where(c => objSecs[c].Idx.Count > 0))
             {
                 sections.Add(objSecs[cls]); mats.Add(Mat("object_materials", cls)); sectionNames.Add($"objects:{cls}");
@@ -364,7 +392,7 @@ internal static class Visuals
         r["road"] = $"{road.Pos.Count} vertices, {road.Idx.Count / 3} triangles (codes {string.Join(", ", roadCodes)})";
         r["edge_posts"] = postCount;
         r["edge_posts_first"] = postCentres;
-        r["gates"] = "start + finish: 2 posts + banner each";
+        r["gates"] = hideMarkers ? "none (native props)" : "start + finish: 2 posts + banner each";
         r["materials"] = new JsonArray(mats.Select(m => (JsonNode)(m == 0 ? "default" : cell.ImportName(-m - 1))).ToArray());
         r["export_bytes"] = $"{comp.Data.Length} -> {data.Length}";
         var (mn, mx) = ProcMesh.Bounds(sections.SelectMany(s => s.Pos));
@@ -592,13 +620,13 @@ internal static class Visuals
         var boxSecs = new List<ProcMesh.Section> { secs[1] };
         if (opt.GroundBake is not null)
         {
-            var tileIdx = terrainIdx.Where(i => secNames?[i] != "terrain:rest").ToList();
+            var tileIdx = terrainIdx.Where(i => secNames?[i] is not ("terrain:rest" or "terrain:steep")).ToList();
             int uvOut = tileIdx.Sum(i => secs[i].Uv.Count(u => u.X < 0 || u.X > 1 || u.Y < 0 || u.Y > 1));
             int verts = tileIdx.Sum(i => secs[i].Pos.Count);
             int rest = terrainIdx.Where(i => secNames?[i] == "terrain:rest").Sum(i => secs[i].Idx.Count / 3);
             C(secNames is not null && tileIdx.Count > 0 && uvOut == 0,
               $"visuals: ground bake: {tileIdx.Count} tile sections, UV0 inside the tile texture (0..1) on all {verts} vertices ({uvOut} outside); {rest} triangles over no tile");
-            boxSecs = terrainIdx.Where(i => secNames?[i] == "terrain:rest").Select(i => secs[i]).ToList();
+            boxSecs = terrainIdx.Where(i => secNames?[i] is "terrain:rest" or "terrain:steep").Select(i => secs[i]).ToList();
         }
         if (opt.Dr2On("terrain"))
         foreach (var tr in boxSecs)
@@ -666,8 +694,11 @@ internal static class Visuals
             worst = Math.Max(worst, (ctr - edges[k]).Length());
         }
         double width = ir.Gates.Average(g => Math.Sqrt(Math.Pow(g.left[0] - g.right[0], 2) + Math.Pow(g.left[2] - g.right[2], 2)));
-        C(count == edges.Count && posts.Pos.Count == count * 20 && worst < 1,
-          $"visuals: {count} edge posts every {spacing} m on both gate edges (max offset {worst:0.00} cm; mean road width {width:0.0} m)");
+        if (visualsReport?["edge_posts"]?.GetValue<int>() == 0)
+            C(posts.Pos.Count == 3 && secs[4].Pos.Count == 3, "visuals: edge posts and gates left out (native props), one placeholder triangle each");
+        else
+            C(count == edges.Count && posts.Pos.Count == count * 20 && worst < 1,
+              $"visuals: {count} edge posts every {spacing} m on both gate edges (max offset {worst:0.00} cm; mean road width {width:0.0} m)");
 
         // ground: the terrain + road sections cover the placed DR2 centreline
         var ground = terrainSecs.SelectMany(s => s.Pos).Concat(secs[2].Pos).ToList();
@@ -1021,6 +1052,29 @@ internal static class Visuals
     /// Box projection in place: each triangle takes UV0 from the axis plane its face normal points along most (UE
     /// X/Y/Z), one texture repeat every `repeatCm`; vertices are duplicated where triangles on different planes meet
     /// (normals kept smooth).
+    /// Splits a section's triangles by a predicate on their corner positions: (kept, moved), each with its own vertices.
+    static (ProcMesh.Section keep, ProcMesh.Section moved) SplitTriangles(ProcMesh.Section s, Func<Vector3, Vector3, Vector3, bool> move)
+    {
+        var outs = new[] { new ProcMesh.Section { Color = s.Color }, new ProcMesh.Section { Color = s.Color } };
+        var maps = new[] { new Dictionary<uint, uint>(), new Dictionary<uint, uint>() };
+        for (int t = 0; t + 2 < s.Idx.Count; t += 3)
+        {
+            int k = move(s.Pos[(int)s.Idx[t]], s.Pos[(int)s.Idx[t + 1]], s.Pos[(int)s.Idx[t + 2]]) ? 1 : 0;
+            for (int j = 0; j < 3; j++)
+            {
+                uint v = s.Idx[t + j];
+                if (!maps[k].TryGetValue(v, out var nv))
+                {
+                    maps[k][v] = nv = (uint)outs[k].Pos.Count;
+                    outs[k].Pos.Add(s.Pos[(int)v]); outs[k].Nrm.Add(s.Nrm[(int)v]); outs[k].Uv.Add(s.Uv[(int)v]);
+                    if (s.Tan.Count == s.Pos.Count) outs[k].Tan.Add(s.Tan[(int)v]);
+                }
+                outs[k].Idx.Add(nv);
+            }
+        }
+        return (outs[0], outs[1]);
+    }
+
     static string BoxUv(ProcMesh.Section s, float repeatCm)
     {
         var pos = s.Pos.ToList(); var nrm = s.Nrm.ToList(); var idx = s.Idx.ToList();

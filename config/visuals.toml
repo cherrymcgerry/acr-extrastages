@@ -122,6 +122,10 @@ max_size = 2048                 # mips larger than this are dropped
 terrain = "nz_ral_set_1_01_d1049518591_slice4"   # grass
 terrain_tile_m = 8                                # DR2's detail UV1 on the terrain is ~8 m per unit
 road = "nz_ral_set_1_01_d1049518591_slice2"      # road strip: gravel with grass verges, edge to edge across U
+# v1.14 (stage-build --visuals-steep 1, launcher --native-props): ground faces steeper than steep_min_deg get this stony
+# slice, box-projected every terrain_tile_m, instead of the top-down ground bake (which streaks on banks)
+steep = "nz_ral_set_1_01_d1049518591_slice14"
+steep_min_deg = 40
 # vista: large colour map (tint) x 2 over the three layers' mean colours mixed by the blend map, baked
 vista_colour_map = "nz_ral_master_vista_cm"
 vista_blend_map = "nz_ral_master_vista_mk"

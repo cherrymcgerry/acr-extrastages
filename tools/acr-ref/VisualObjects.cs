@@ -40,7 +40,7 @@ internal static class VisualObjects
     /// material, with the glb's TEXCOORD_0; everything else stays in the class sections as before.
     public static (Dictionary<string, ProcMesh.Section> sections, JsonObject report) Build(
         StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ObjectColliders.Result objs, Func<V3, bool> inPhysicsBounds, string vegetation, string? canopies = null,
-        Func<string, bool>? dr2Materials = null, Func<string, int>? billboardFrames = null)
+        Func<string, bool>? dr2Materials = null, Func<string, int>? billboardFrames = null, ISet<string>? replaced = null)
     {
         int maxMeshTris = (int)cfg.Num("objects", "max_mesh_triangles");
         int sides = (int)cfg.Num("objects", "prism_sides");
@@ -71,6 +71,7 @@ internal static class VisualObjects
         var stage = JsonNode.Parse(File.ReadAllText(Path.Combine(ir.Dir, "stage.json")))!["objects"]!;
         var templates = stage["templates"]!.AsObject();
         var treeClasses = cfg.Arr("objects", "tree_shape_classes").Cast<string>().ToHashSet();
+        int nativeProps = 0;
         int instances = 0, outside = 0, noMesh = 0, meshInstances = 0, proxyInstances = 0, notSolid = 0, treeInstances = 0;
         int alignChecked = 0, misaligned = 0, crownsDrawn = 0, crownsDropped = 0;
         var perTemplate = new SortedDictionary<string, string>();
@@ -148,6 +149,8 @@ internal static class VisualObjects
             var m = ObjectColliders.Trs(inst["transform"]);
             var origin = Vector3.Transform(Vector3.Zero, m);
             if (!inPhysicsBounds(pl.ToPhysics(origin.X, origin.Y, origin.Z))) { outside++; continue; }
+            // v1.14 native props: an ACR mesh in the level stands here (NativeProps); the colliders stay
+            if (replaced?.Contains(inst["id"]!.GetValue<string>()) == true) { nativeProps++; perTemplate.TryAdd(tname, "native ACR prop"); continue; }
             meshes.TryGetValue(tname, out var mesh);
             var shapes = kept.GetValueOrDefault(inst["id"]!.GetValue<string>()) ?? [];
             bool tree = shapes.Any(s => s.Material == "PM_WallWoodTreeTrunks") || templates[tname]?["bodies"]?.AsArray()
@@ -286,7 +289,7 @@ internal static class VisualObjects
             for (int i = 0; i < s.Nrm.Count; i++) s.Nrm[i] = s.Nrm[i] == Vector3.Zero ? Vector3.UnitZ : Vector3.Normalize(s.Nrm[i]);
         var r = new JsonObject
         {
-            ["instances"] = instances, ["outside_physics_bounds"] = outside, ["trees"] = treeInstances,
+            ["instances"] = instances, ["outside_physics_bounds"] = outside, ["trees"] = treeInstances, ["native_props"] = nativeProps,
             ["vegetation"] = vegetation,
             ["render_mesh_instances"] = meshInstances, ["shape_proxy_instances"] = proxyInstances,
             ["not_solid_not_drawn"] = notSolid,

@@ -34,6 +34,8 @@ internal static class Program
           --keep-temp             keep per-stage scratch folders --copy     copy instead of hard-linking
           --vegetation <mode>     none (default) or billboards: DR2's trees and bushes as billboards (experimental)
           --native-foliage        DR2's trees, bushes and grasses as ACR's own foliage (experimental; implies --vegetation native)
+          --native-props          also DR2's fences, signs, gantries, cones and rocks as ACR props, roadside grass and
+                                  rock texture on steep banks (experimental; implies --native-foliage)
           --ignore-disk-space     warn instead of stopping when free space is below the estimate
           --root <dir>            folder with config\ and work\ (default: next to the exe / the repo root)
           --tools <dir>           folder with <tool>\<tool>.exe  --yes      accept defaults, never prompt
@@ -88,10 +90,11 @@ internal static class Program
                 Force = flags.Contains("force"),
                 NoVerify = flags.Contains("no-verify"),
                 KeepTemp = flags.Contains("keep-temp"),
-                NativeFoliage = flags.Contains("native-foliage"),
+                NativeFoliage = flags.Contains("native-foliage") || flags.Contains("native-props"),
+                NativeProps = flags.Contains("native-props"),
                 Vegetation = named.GetValueOrDefault("vegetation") is { } veg
                     ? veg is "none" or "billboards" or "native" ? veg : throw new LauncherException($"--vegetation must be none, billboards or native, not {veg}")
-                    : flags.Contains("native-foliage") ? "native" : "none",
+                    : flags.Contains("native-foliage") || flags.Contains("native-props") ? "native" : "none",
                 IgnoreDisk = flags.Contains("ignore-disk-space"),
                 Copy = flags.Contains("copy"),
                 MaxLengthKm = named.TryGetValue("max-length-km", out var mk) ? double.Parse(mk, CultureInfo.InvariantCulture) : null,

@@ -55,6 +55,7 @@ internal static class Program
                 "export-bytes" => TexScan.ExportBytes(opts),
                 "data-resources" => TexScan.DataResources(opts),
                 "mesh-info" => TexScan.MeshInfo(opts),
+                "mesh-thumbs" => MeshThumbs.Run(opts),
                 "uv-fit" => UvFit.Run(opts),
                 "dds-preview" => DropIn.Preview(opts),
                 "vista-map" => DropIn.VistaMap(opts),

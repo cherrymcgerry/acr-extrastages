@@ -266,6 +266,8 @@ internal sealed class Dr2Materials
     /// and stages without one (terrain_road / terrain_wsm shaders) take the diffuse most used by their terrain materials.
     public string TerrainTexture => _terrainTex ??= ResolveGround("terrain");
     public string RoadTexture => _roadTex ??= ResolveGround("road");
+    string? _steepTex;
+    public string SteepTexture => _steepTex ??= ResolveGround("steep");
 
     string ResolveGround(string kind)
     {

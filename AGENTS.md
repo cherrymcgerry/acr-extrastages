@@ -71,6 +71,19 @@ Texture2D + MaterialInstanceConstant packages cloned from cooked templates (Drop
     of the export. NativeFoliage rebuilds all of it for any instance count (own breadth-first cluster tree, identity
     order arrays).
   - Never use scale-0 instances (singular matrices); the component then does not render.
+- **Props (v1.14, NativeProps.cs, `[native_props]`, launcher `--native-props`):** any ACR mesh from any map (Props/,
+  RallyProps/ gantries, timers, signs, tape poles, cones; Fences/; Nature/ boulders) can replace DR2 objects.
+  - Instanced props (fences, rocks) use stamp HISMs like the foliage, with a full transform per instance (long plan
+    axes aligned, fences tiled and stretched to the DR2 length). Grass goes on the WildGrass stamp `_1`.
+  - Single props use the **service park's StaticMeshActors** (310 tagged ServicePark in the persistent level; 238
+    usable: those with OverrideMaterials or RelativeScale3D are skipped). Their StaticMeshComponent's RelativeLocation
+    and RelativeRotation are present as doubles and rewritten in place, the StaticMesh import int (found once in the
+    export) and its preload dep retargeted, the actor's tag renamed. Scale stays 1: pick the mesh variant that fits.
+  - The plan is made before the visuals so replaced DR2 instances are left out of the procedural mesh
+    (`VisualObjects`, `replaced`); colliders stay in BakedData. `hide_markers` drops the build's edge posts and gates.
+  - Steep ground (`--visuals-steep`, `[dr2_textures] steep*`): faces over 40 deg get a stony DR2 slice, box-projected.
+  - Choose meshes by shape with `acr-ref mesh-thumbs --filter <regex> --out sheet.png` (LOD0 / Nanite fallback, flat
+    shaded, red tick +X, green +Y; blue panels are masked materials such as wire mesh).
 - **Names:** new FNames used from export data must go inside `NamesReferencedFromExportDataCount`
   (`AddExportName`), or `retoc to-zen` drops them.
 - **Persistent-level edits:** CUE4Parse reads values (floats) from the vanilla game; locate them in the legacy bytes
@@ -80,14 +93,14 @@ Texture2D + MaterialInstanceConstant packages cloned from cooked templates (Drop
 
 ## Useful acr-ref commands added
 
-`preview`, `mesh-info --filter`, `export-bytes <pkg> <export0>`, `data-resources <pkg>`, `dds-preview --alpha 1`
+`preview`, `mesh-info --filter`, `mesh-thumbs --filter --out`, `export-bytes <pkg> <export0>`, `data-resources <pkg>`, `dds-preview --alpha 1`
 (now decodes BC7), `mic-scan`, `tex-scan`, `legacy-dump`.
 
 ## Status (2026-11-01)
 
 - `linux-port`: Linux support, draft PR cherrymcgerry/acr-extrastages#1 (CI on the fork needs Actions enabled once).
 - `visual-preview`: preview tool, billboards (`--vegetation billboards`, works but dark), native foliage
-  (`--native-foliage`). Proof with 143 spruces worked in game. Full mapping (19,770 plants, 9 ACR meshes; species
-  in config/scenery.toml) is built and installed, **not yet checked in game**.
-- Next: check native foliage in game (sizes, density, frame rate), then ground grass (option 4) from the WildGrass
-  stamp host, then the flat-colour start gate / posts (debug MI colours) and fences.
+  (`--native-foliage`): full mapping (about 19,900 plants, 8 ACR meshes) confirmed good in game.
+- Native props (`--native-props`): 1,162 wire fence + 165 log fence panels, 107 boulders, 235 single props (gantries,
+  timers, signs, tape poles, markers, posts, cones), 11.5k grass clumps, stony steep banks. Built and verified
+  offline (40/40); **in-game check pending** (sign facing may be 180 degrees off: no front/back known per mesh).
