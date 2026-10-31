@@ -38,6 +38,7 @@ internal static class Program
                 "stage-build" => StageBuild.Run(opts),
                 "stage-check" => StageBuild.RunCheck(opts),
                 "stage-verify" => StageVerify.Run(opts),
+                "preview" => Preview.Run(opts),
                 "pacenote-survey" => Pacenotes.Survey(opts),
                 "surface-map-check" => SurfaceMapCheck.Run(opts),
                 "height-survey" => HeightSurvey.Run(opts),
