@@ -6,11 +6,17 @@ use std::process::Command;
 
 pub const APP_ID: u32 = 3917090;
 pub const DEFAULT_GAME_DIR: &str = r"C:\Program Files (x86)\Steam\steamapps\common\Assetto Corsa Rally";
+/// Linux: relative to $HOME (the native Steam client's library).
+pub const DEFAULT_GAME_DIR_LINUX: &str = ".local/share/Steam/steamapps/common/Assetto Corsa Rally";
 
 /// `--game`, else `ACR_GAME_DIR`, else the default Steam library path.
 pub fn game_dir(arg: Option<PathBuf>) -> PathBuf {
-    arg.or_else(|| std::env::var_os("ACR_GAME_DIR").map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_GAME_DIR))
+    arg.or_else(|| std::env::var_os("ACR_GAME_DIR").map(PathBuf::from)).unwrap_or_else(|| {
+        match std::env::var_os("HOME") {
+            Some(home) if cfg!(not(windows)) => PathBuf::from(home).join(DEFAULT_GAME_DIR_LINUX),
+            _ => PathBuf::from(DEFAULT_GAME_DIR),
+        }
+    })
 }
 
 pub fn check_game_dir(game: &Path) -> Result<()> {
@@ -54,6 +60,18 @@ pub fn build_id(game: &Path) -> Result<String> {
 /// Asks Steam to start the game (Steam starts too if needed).
 pub fn launch() -> Result<()> {
     let url = format!("steam://rungameid/{APP_ID}");
+    if cfg!(not(windows)) {
+        // hands the URL to the running Steam client (or starts it); not waited on, as a cold Steam start keeps running
+        Command::new("steam")
+            .arg(&url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .or_else(|_| Command::new("xdg-open").arg(&url).spawn())
+            .context("starting the game through Steam")?;
+        return Ok(());
+    }
     let status =
         Command::new("cmd").args(["/C", "start", "", &url]).status().context("starting the game through Steam")?;
     if !status.success() {
@@ -64,6 +82,14 @@ pub fn launch() -> Result<()> {
 
 /// Asks the game to close (WM_CLOSE through `taskkill` without `/F`); with `force`, terminates it.
 pub fn close(pid: u32, force: bool) -> Result<()> {
+    if cfg!(not(windows)) {
+        // Proton: SIGTERM ends the Wine process (there is no WM_CLOSE from outside), SIGKILL with `force`
+        let out = Command::new("kill").args([if force { "-KILL" } else { "-TERM" }, &pid.to_string()]).output()?;
+        if !out.status.success() {
+            bail!("kill {pid}: {}", String::from_utf8_lossy(&out.stderr).trim());
+        }
+        return Ok(());
+    }
     let mut cmd = Command::new("taskkill");
     cmd.args(["/PID", &pid.to_string()]);
     if force {

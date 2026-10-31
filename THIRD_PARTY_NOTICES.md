@@ -22,6 +22,7 @@ memory; the version and source used are given in each row.
 | [BCnEncoder.Net](https://github.com/Nominom/BCnEncoder.NET) | 2.2.1 | MIT OR Unlicense (public domain) | Block-compressed texture encoding/decoding. |
 | [Newtonsoft.Json](https://github.com/JamesNK/Newtonsoft.Json) | 13.0.4 | MIT | JSON in `acr-ref` and `acr-additive`. |
 | [Iced](https://github.com/icedland/iced) | 1.21.0 | MIT | x86 decoding in `acr-ref`. |
+| [SkiaSharp](https://github.com/mono/SkiaSharp) (+ `SkiaSharp.NativeAssets.Linux.NoDependencies`) | 3.119.1 | MIT (native library: see note) | Location logos in the **Linux** launcher only (the Windows launcher keeps System.Drawing). |
 | Oodle (RAD Game Tools / Epic) | not bundled | Proprietary | Runtime-fetched or user-supplied only. See below. |
 
 Other NuGet packages pulled in transitively (via CUE4Parse, Ego-Engine-Modding and
@@ -36,11 +37,12 @@ Unreal Engine 5 packages are Oodle-compressed, so reading ACR needs the Oodle Da
 Tools / Epic Games and is **not** open source. This project:
 
 - **never includes, commits or redistributes an Oodle binary** in the repository or in a release
-  archive (`oo2core*` is git-ignored and the release packaging must exclude `oo2core*.dll` and
-  `oodle*.dll`);
+  archive (`oo2core*` and `liboo2core*` are git-ignored and the release packaging must exclude
+  `oo2core*`, `liboo2core*` and `oodle*` files);
 - relies on other tools to obtain it at run time on the user's own PC: retoc downloads
-  `oo2core_9_win64.dll` (v2.9.10) next to `retoc.exe` and CUE4Parse downloads
-  `oodle-data-shared.dll` next to the tool, both from the third-party GitHub repository
+  `oo2core_9_win64.dll` (v2.9.10) next to `retoc.exe` (on Linux `liboo2corelinux64.so.9`) and
+  CUE4Parse downloads `oodle-data-shared.dll` next to the tool (on Linux a Linux build under the
+  same name), both from the third-party GitHub repository
   [WorkingRobot/OodleUE](https://github.com/WorkingRobot/OodleUE) (a mirror of Oodle from
   Unreal Engine's source; GitHub reports no license for that repository), or the user supplies their own
   copy;
@@ -49,6 +51,15 @@ Tools / Epic Games and is **not** open source. This project:
 Whether obtaining Oodle this way is permitted depends on your Unreal Engine / Oodle license
 terms; that is the user's responsibility. Offline use of ACR Extra Stages only needs
 decompression of the user's own game files and compression of the user's own mod files.
+
+### SkiaSharp (Linux launcher only)
+
+SkiaSharp 3.119.1 is MIT-licensed (copyright (c) 2015-2016 Xamarin, Inc., (c) 2017-2018 Microsoft Corporation;
+verified in the packages' `.nuspec` and `LICENSE.txt`). Its native `libSkiaSharp.so`, which the Linux launcher
+bundles, contains Skia and libraries such as FreeType, HarfBuzz, libpng, libjpeg-turbo, libwebp, expat and zlib under
+BSD-style, MIT, FreeType and zlib licenses. Their notices are in the package's `THIRD-PARTY-NOTICES.txt`;
+`scripts/package.ps1` copies that file into the Linux archive as `THIRD_PARTY_NOTICES-SkiaSharp.txt`. The Windows
+launcher does not reference SkiaSharp.
 
 ### SixLabors.ImageSharp
 

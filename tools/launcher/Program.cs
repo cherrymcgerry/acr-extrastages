@@ -6,6 +6,9 @@ namespace AcrExtraStages;
 
 internal static class Program
 {
+    /// The usage text with this platform's executable name (AcrExtraStages on Linux).
+    static string UsageText => Usage.Replace("AcrExtraStages.exe", Layout.Exe("AcrExtraStages"));
+
     const string Usage = """
         AcrExtraStages.exe [command] [options]       no command: interactive menu
 
@@ -47,7 +50,7 @@ internal static class Program
         for (int i = 0; i < argv.Length; i++)
         {
             var a = argv[i];
-            if (a is "-h" or "--help" or "/?") { Console.WriteLine(Usage); return 0; }
+            if (a is "-h" or "--help" or "/?") { Console.WriteLine(UsageText); return 0; }
             if (a.StartsWith("--") || a.StartsWith('-') && a.Length > 1 && !char.IsDigit(a[1]))
             {
                 var k = a.TrimStart('-');
@@ -59,7 +62,7 @@ internal static class Program
                 else flags.Add(k);
             }
             else if (cmd is null) cmd = a.ToLowerInvariant();
-            else { Console.Error.WriteLine($"unexpected argument {a}\n\n{Usage}"); return 2; }
+            else { Console.Error.WriteLine($"unexpected argument {a}\n\n{UsageText}"); return 2; }
         }
         var interactive = cmd is null;
         Ui.Yes = flags.Contains("yes");
@@ -129,7 +132,7 @@ internal static class Program
 
     static int Bad(string cmd)
     {
-        Console.Error.WriteLine($"unknown command {cmd}\n\n{Usage}");
+        Console.Error.WriteLine($"unknown command {cmd}\n\n{UsageText}");
         return 2;
     }
 
