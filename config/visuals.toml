@@ -127,6 +127,12 @@ vista_colour_map = "nz_ral_master_vista_cm"
 vista_blend_map = "nz_ral_master_vista_mk"
 vista_layers = ["nz_ral_vista_grass_d", "nz_ral_vista_road_d", "nz_ral_vista_forest_d"]
 vista_size = 2048
+# vegetation billboards (stage-build --visuals-vegetation billboards): DR2's billboard atlases (<template>_lod_d) on a
+# masked, two-sided foliage MIC cloned from ACR's treeline material; its atlas tiling scalars are set to 1
+foliage_mic_template = "/Game/Environments/RallyShared/MaterialInstances/M_Treeline_Wales"   # parent M_TreelineMaster
+foliage_base_texture = "T_Treeline_Atlas_01_D"     # BaseColor (alpha = opacity mask)
+foliage_normal_texture = "T_Treeline_Atlas_01_N"   # Normalmap -> flat
+foliage_unit_scalars = ["UsedTiles", "VerticalTiles"]
 # objects: render-mesh instances by DR2 material (TDiffuse*); these shaders are alpha-tested or blended (no masked
 # parent: M_Simple is opaque), their triangles keep the class colour
 object_skip_shaders = ["foliage", "decal", "blend", "glass", "water", "shadow"]

@@ -302,11 +302,12 @@ internal static class Preview
             var s = ProcMesh.ReadSection(c.Data, ref p, out _);
             string name = names[i], mi = mats[i];
             if (name == "dummy") continue;
-            byte cat = name.StartsWith("terrain") || name == "vista" ? Ground : name == "road" ? Road : name == "objects:trunks" ? Trunk : Object;
+            bool veg = name.StartsWith("vegetation:");   // billboards: masked foliage material
+            byte cat = name.StartsWith("terrain") || name == "vista" ? Ground : name == "road" ? Road : name == "objects:trunks" ? Trunk : veg ? Vegetation : Object;
             var tex = TexFor(mi);
             var colour = tex is not null ? Vector3.One : WallColours.GetValueOrDefault(mi, new Vector3(0.6f));
             var uv = s.Uv.Count == s.Pos.Count ? s.Uv.ToArray() : new Vector2[s.Pos.Count];
-            (cat is Ground or Road ? ground : objects).AddRange(Split(s.Pos.ToArray(), uv, s.Idx.ToArray(), tex, colour, false, cat));
+            (cat is Ground or Road ? ground : objects).AddRange(Split(s.Pos.ToArray(), uv, s.Idx.ToArray(), tex, colour, veg && tex is not null, cat));
         }
         return (ground, objects, unresolved.ToList());
     }

@@ -194,6 +194,63 @@ internal sealed class Dr2Materials
         return _mics[name] = path;
     }
 
+    /// v1.12: a masked, two-sided foliage MaterialInstanceConstant (path returned) for vegetation billboards, cloned from
+    /// [dr2_textures] foliage_mic_template (an M_TreelineMaster child): base colour = the DR2 billboard atlas (alpha =
+    /// coverage, the parent's opacity mask), the flat normal, and the template's atlas tiling scalars
+    /// (foliage_unit_scalars) set to 1 so the UVs address the whole texture. The cooked shader stays the parent's.
+    public string FoliageMic(string name, string baseColor)
+    {
+        if (_mics.TryGetValue(name, out var known)) return known;
+        var tpl = _cfg.Str("dr2_textures", "foliage_mic_template");
+        var pkg = new LegacyPackage(LegacyFile(tpl));
+        var path = $"{_root}/Mat/MI_{Clean(name)}";
+        void Rename(string from, string to)
+        {
+            int i = pkg.FindName(from);
+            if (i < 0) throw new InvalidDataException($"{tpl}: name {from} not found");
+            pkg.RenameName(i, to);
+        }
+        string Obj(string p) => p[(p.LastIndexOf('/') + 1)..];
+        foreach (var (key, tex) in new[] { ("foliage_base_texture", baseColor), ("foliage_normal_texture", Normal()) })
+        {
+            var old = _cfg.Str("dr2_textures", key);
+            int imp = Enumerable.Range(0, pkg.ImportCount).Single(i => pkg.ImportName(i) == Obj(old) && pkg.ImportClassName(i) == "Texture2D");
+            Rename(pkg.ImportName(-pkg.ImportOuter(imp) - 1), tex);
+            Rename(Obj(old), Obj(tex));
+        }
+        // ScalarParameterValues: FName ParameterInfo.Name (index, number 0), then within the struct the float value
+        var data = pkg.GetExportData(0);
+        foreach (var scalar in _cfg.Arr("dr2_textures", "foliage_unit_scalars").Cast<string>())
+        {
+            int ni = pkg.FindName(scalar);
+            if (ni < 0) throw new InvalidDataException($"{tpl}: scalar {scalar} not in the name map");
+            var key = new byte[8];
+            BinaryPrimitives.WriteInt32LittleEndian(key, ni);
+            var hits = new List<int>();
+            for (int at = data.AsSpan().IndexOf(key); at >= 0;)
+            {
+                hits.Add(at);
+                int next = data.AsSpan(at + 1).IndexOf(key);
+                at = next < 0 ? -1 : at + 1 + next;
+            }
+            int patched = 0;
+            foreach (var at in hits)
+                for (int k = at + 8; k + 4 <= Math.Min(data.Length, at + 40); k++)
+                {
+                    float v = BinaryPrimitives.ReadSingleLittleEndian(data.AsSpan(k));
+                    if (v is >= 2 and <= 16 && v == MathF.Round(v)) { BinaryPrimitives.WriteSingleLittleEndian(data.AsSpan(k), 1f); patched++; break; }
+                }
+            if (patched != 1) throw new InvalidDataException($"{tpl}: scalar {scalar}: {patched} tile counts patched (expected 1)");
+        }
+        pkg.SetExportData(0, data);
+        Rename(pkg.ExportName(0), Obj(path));
+        Rename(pkg.PackageName, path);
+        pkg.SetPackageName(path);
+        pkg.SaveTo(Path.Combine(_outRoot, "acr", "Content", path["/Game/".Length..].Replace('/', Path.DirectorySeparatorChar) + ".uasset"));
+        Log.Add($"{path}: base colour {baseColor} (foliage, masked)");
+        return _mics[name] = path;
+    }
+
     // ---- stand-in textures for stages whose location is not the one config/visuals.toml names ----------------------------
 
     bool Usable(string name)
@@ -458,9 +515,18 @@ internal static class DropIn
         {
             var dds = new Dds(f);
             int m = Enumerable.Range(0, dds.Mips.Count).FirstOrDefault(i => dds.MipWidth(i) <= max);
-            var px = dds.Decode(m);
+            var px = dds.Format == Dds.Fmt.BC7 ? Tex.DecodeBc7(dds.Mips[m], dds.MipWidth(m), dds.MipHeight(m)) : dds.Decode(m);
             if (px is null) { Console.WriteLine($"{f}: {dds.Format} not decoded"); continue; }
-            for (int i = 3; i < px.Length; i += 4) px[i] = 255; // DR2 diffuse alpha is specular, not coverage
+            if (o.Named.ContainsKey("alpha"))
+                // coverage (foliage TDiffuseAlphaMap): composite over a grey checkerboard
+                for (int i = 0, k = 0; i < px.Length; i += 4, k++)
+                {
+                    int x = k % dds.MipWidth(m), y = k / dds.MipWidth(m), bg = ((x / 16 + y / 16) & 1) == 0 ? 90 : 140;
+                    for (int c = 0; c < 3; c++) px[i + c] = (byte)((px[i + c] * px[i + 3] + bg * (255 - px[i + 3])) / 255);
+                    px[i + 3] = 255;
+                }
+            else
+                for (int i = 3; i < px.Length; i += 4) px[i] = 255; // DR2 object diffuse alpha is specular, not coverage
             var png = Path.Combine(outDir, Path.GetFileNameWithoutExtension(f) + ".png");
             Dds.WritePng(png, dds.MipWidth(m), dds.MipHeight(m), px);
             double r = 0, g = 0, b = 0;

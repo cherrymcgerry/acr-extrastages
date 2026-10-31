@@ -33,12 +33,14 @@ internal static class VisualObjects
 
     /// Prefix of the per-DR2-material sections (dr2Materials): "dr2:" + glb material name.
     public const string Dr2Prefix = "dr2:";
+    /// Section key prefix of the vegetation billboards (one section per template: its DR2 billboard texture).
+    public const string BillboardPrefix = "bb:";
 
     /// dr2Materials (v1.8): render-mesh instances put their triangles of the accepted DR2 materials into one section per
     /// material, with the glb's TEXCOORD_0; everything else stays in the class sections as before.
     public static (Dictionary<string, ProcMesh.Section> sections, JsonObject report) Build(
         StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ObjectColliders.Result objs, Func<V3, bool> inPhysicsBounds, string vegetation, string? canopies = null,
-        Func<string, bool>? dr2Materials = null)
+        Func<string, bool>? dr2Materials = null, Func<string, int>? billboardFrames = null)
     {
         int maxMeshTris = (int)cfg.Num("objects", "max_mesh_triangles");
         int sides = (int)cfg.Num("objects", "prism_sides");
@@ -72,7 +74,18 @@ internal static class VisualObjects
         int instances = 0, outside = 0, noMesh = 0, meshInstances = 0, proxyInstances = 0, notSolid = 0, treeInstances = 0;
         int alignChecked = 0, misaligned = 0, crownsDrawn = 0, crownsDropped = 0;
         var perTemplate = new SortedDictionary<string, string>();
-        bool crowns = vegetation switch { "none" => false, "crowns" => true, _ => throw new ArgumentException($"vegetation must be none or crowns, not {vegetation}") };
+        bool crowns = vegetation switch
+        {
+            "none" or "billboards" or "native" => false, "crowns" => true,
+            _ => throw new ArgumentException($"vegetation must be none, crowns, billboards or native, not {vegetation}"),
+        };
+        bool billboards = vegetation == "billboards";
+        // v1.13 native: trees are ACR foliage in the level (NativeFoliage); their trunk colliders stay but are not drawn
+        bool native = vegetation == "native";
+        if (billboards && billboardFrames is null) throw new ArgumentException("vegetation billboards needs DR2 textures (--visuals-dr2 1)");
+        int billboardsDrawn = 0, billboardsOnRoad = 0;
+        var billboardsPerTemplate = new SortedDictionary<string, int>();
+        var noBillboard = new SortedSet<string>();
         double overhang = cfg.Num("objects", "overhang_height_m") * 100;
         double meshPenLimit = objs.Probe.MaxPen + cfg.Num("objects", "road_overlap_tolerance_m") * 100;
         double maxOverBounds = cfg.Num("objects", "max_extent_over_bounds");
@@ -93,6 +106,41 @@ internal static class VisualObjects
 
         V3 Ue(Vector3 dr2) => pl.ToUe([dr2.X, dr2.Y, dr2.Z]);
 
+        // v1.12 vegetation billboards: two crossed quads over the template's render bounds (template X-Y and Z-Y planes
+        // through the base centre, each as wide as the bounds along its axis), each showing one frame of DR2's
+        // billboard atlas (frames side by side, the plant's base at the bottom edge). The masked two-sided foliage MIC
+        // draws both faces. Plants whose base stands on the road surface are dropped. Not solid: no BakedData change.
+        bool AddBillboard(string tname, Mesh mesh, Matrix4x4 m)
+        {
+            int frames = billboardFrames!(tname);
+            if (frames <= 0) { noBillboard.Add(tname); return false; }
+            var mn = mesh.Min; var mx = mesh.Max;
+            var bc = new Vector3((mn.X + mx.X) / 2, mn.Y, (mn.Z + mx.Z) / 2);
+            var baseUe = Ue(Vector3.Transform(bc, m));
+            if (objs.Probe.OnRoadSurface(baseUe.X, baseUe.Y)) { billboardsOnRoad++; return false; }
+            var key = BillboardPrefix + tname;
+            if (!sec.TryGetValue(key, out var target)) sec[key] = target = new ProcMesh.Section();
+            float h = mx.Y - mn.Y;
+            foreach (var (axis, half, frame) in new[] { (Vector3.UnitX, (mx.X - mn.X) / 2, 0), (Vector3.UnitZ, (mx.Z - mn.Z) / 2, frames / 4) })
+            {
+                float u0 = (float)frame / frames, u1 = (float)(frame + 1) / frames;
+                var corners = new[]
+                {
+                    (bc - axis * half, new Vector2(u0, 1)), (bc + axis * half, new Vector2(u1, 1)),
+                    (bc + axis * half + Vector3.UnitY * h, new Vector2(u1, 0)), (bc - axis * half + Vector3.UnitY * h, new Vector2(u0, 0)),
+                };
+                int b = target.Pos.Count;
+                var w = corners.Select(c => Ue(Vector3.Transform(c.Item1, m))).Select(u => new Vector3((float)u.X, (float)u.Y, (float)u.Z)).ToArray();
+                var n = Vector3.Cross(w[1] - w[0], w[3] - w[0]);
+                n = n.LengthSquared() > 0 ? Vector3.Normalize(n) : Vector3.UnitZ;
+                for (int k = 0; k < 4; k++) { target.Pos.Add(w[k]); target.Nrm.Add(n); target.Uv.Add(corners[k].Item2); }
+                target.Idx.AddRange([(uint)b, (uint)b + 1, (uint)b + 2, (uint)b, (uint)b + 2, (uint)b + 3]);
+            }
+            billboardsDrawn++;
+            billboardsPerTemplate[tname] = billboardsPerTemplate.GetValueOrDefault(tname) + 1;
+            return true;
+        }
+
         foreach (var inst in stage["instances"]!.AsArray())
         {
             instances++;
@@ -108,6 +156,7 @@ internal static class VisualObjects
             // solid bush colliders (PM_WallBush): soft vegetation is not drawn (v1.4); the colliders stay in BakedData. Drawn they were up to 3M triangles of bushes.
             if (!tree && shapes.Count > 0 && shapes.All(s => ClassOf(s.Material) == "soft"))
             {
+                if (billboards && mesh is not null && AddBillboard(tname, mesh, m)) { perTemplate.TryAdd(tname, "bush collider: billboard"); continue; }
                 notSolid++; perTemplate.TryAdd(tname, "bush collider: not drawn"); continue;
             }
             var before = sec.ToDictionary(kv => kv.Key, kv => kv.Value.Pos.Count);
@@ -139,7 +188,18 @@ internal static class VisualObjects
                 if (canopy && canopyMode is "clip" or "apex") canopySpans.Add((Math.Max(hi.X - lo.X, hi.Y - lo.Y), $"{s.Template} {s.Instance}"));
                 if (!canopy && s.MeshPhysics is { Count: > 1 }) flareSpans.Add((Math.Max(Math.Max(hi.X - lo.X, hi.Y - lo.Y), hi.Z - lo.Z), $"{s.Template} {s.Instance}"));
             }
-            if (tree && shapes.Count > 0)
+            if (tree && shapes.Count > 0 && native)
+            {
+                treeInstances++;
+                perTemplate.TryAdd(tname, "tree: native ACR foliage (trunk shapes not drawn)");
+            }
+            else if (tree && shapes.Count > 0 && billboards && mesh is not null && AddBillboard(tname, mesh, m))
+            {
+                // the billboard shows the trunk too; the trunk colliders stay in BakedData but are not drawn
+                treeInstances++;
+                perTemplate.TryAdd(tname, "tree: billboard (trunk shapes not drawn)");
+            }
+            else if (tree && shapes.Count > 0)
             {
                 treeInstances++;
                 foreach (var s in shapes) DrawShape(s);
@@ -182,6 +242,8 @@ internal static class VisualObjects
                     : mesh.Idx.Length / 3 > maxMeshTris ? $"kept shapes (render mesh {mesh.Idx.Length / 3} triangles > {maxMeshTris})"
                     : "kept shapes (render mesh reaches into the road corridor)");
             }
+            else if (mesh is not null && billboards && AddBillboard(tname, mesh, m))
+                perTemplate.TryAdd(tname, "not solid: billboard");
             else if (mesh is not null)
             {
                 notSolid++;
@@ -192,7 +254,7 @@ internal static class VisualObjects
             // drawn plan extent of this instance, against its DR2 render bounds
             var dmn = new Vector3(float.MaxValue); var dmx = new Vector3(float.MinValue);
             foreach (var (cls, s) in sec)
-                for (int i = before[cls]; i < s.Pos.Count; i++) { dmn = Vector3.Min(dmn, s.Pos[i]); dmx = Vector3.Max(dmx, s.Pos[i]); }
+                for (int i = before.GetValueOrDefault(cls); i < s.Pos.Count; i++) { dmn = Vector3.Min(dmn, s.Pos[i]); dmx = Vector3.Max(dmx, s.Pos[i]); }
             if (dmn.X <= dmx.X)
             {
                 double ext = Math.Max(dmx.X - dmn.X, dmx.Y - dmn.Y) / 100;
@@ -229,6 +291,13 @@ internal static class VisualObjects
             ["render_mesh_instances"] = meshInstances, ["shape_proxy_instances"] = proxyInstances,
             ["not_solid_not_drawn"] = notSolid,
             ["crowns_drawn"] = crownsDrawn, ["crowns_dropped"] = crownsDropped,
+            ["billboards"] = !billboards ? null : new JsonObject
+            {
+                ["drawn"] = billboardsDrawn, ["base_on_road_dropped"] = billboardsOnRoad,
+                ["templates_without_billboard_texture"] = new JsonArray(noBillboard.Select(x => (JsonNode)x).ToArray()),
+                ["triangles"] = sec.Where(kv => kv.Key.StartsWith(BillboardPrefix)).Sum(kv => kv.Value.Idx.Count / 3),
+                ["per_template"] = new JsonObject(billboardsPerTemplate.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)kv.Value))),
+            },
             ["render_mesh_road_fallback"] = new JsonObject(fallbacks.Select(kv => KeyValuePair.Create(kv.Key,
                 (JsonNode?)$"{kv.Value.n} (render mesh {kv.Value.depth / 100:0.00} m into the corridor -> shapes)"))),
             ["without_render_mesh_or_shapes"] = noMesh,

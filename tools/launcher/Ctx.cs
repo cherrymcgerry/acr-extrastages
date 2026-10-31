@@ -17,6 +17,10 @@ internal sealed class Ctx
     public bool Force { get; init; }
     public bool NoVerify { get; init; }
     public bool KeepTemp { get; init; }
+    /// stage-build --visuals-vegetation: none (v1.4 default) or billboards (v1.12, DR2 billboard atlases).
+    public string Vegetation { get; init; } = "none";
+    /// stage-build --native-foliage: v1.13, DR2's plants as ACR's own instanced foliage (implies --vegetation native).
+    public bool NativeFoliage { get; init; }
     public bool IgnoreDisk { get; init; }
     public bool Copy { get; init; }
     public double? MaxLengthKm { get; init; }

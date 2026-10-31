@@ -182,7 +182,7 @@ internal sealed class Pipeline
                 row.input_hash = Files.HashText(string.Join("|",
                     "spec=" + Files.ContentHash(specs[p.Id].File), "ir=" + Files.FileSig(Path.Combine(ir, "stage.json")),
                     "terrain=" + Files.FileSig(Path.Combine(ir, "render", "terrain.glb")), "bake=" + Files.FileSig(bake),
-                    $"cfg={configSig}", $"tools={toolSig}", $"script={PipelineVersion}", $"vanilla={vanillaSig}"));
+                    $"cfg={configSig}", $"tools={toolSig}", $"script={PipelineVersion}", $"vanilla={vanillaSig}", $"vegetation={_c.Vegetation}", $"native-foliage={_c.NativeFoliage}"));
                 row.status = "todo";
             }
             rows.Add(row);
@@ -372,6 +372,7 @@ internal sealed class Pipeline
             (@"acr/Content/Materials/PhotoMode/Textures/T_Dirt", null),
             (@"acr/Content/Effects/Vehicles/Skid/T_SkidDebug_N", null),
             (@"acr/Content/Environments/MonteCarloS2Sisteron/TileableMaterials/MI_SisteronConcrete01", null),
+            (@"acr/Content/Environments/RallyShared/MaterialInstances/M_Treeline_Wales", null),   // vegetation billboards (foliage_mic_template)
         };
         foreach (var (rel, filter) in host)
         {
@@ -413,7 +414,8 @@ internal sealed class Pipeline
             "--respawn", "relay",
             "--scenery", cfg("scenery.toml"), "--scenery-actor-hidden", "1",
             "--visuals", cfg("visuals.toml"), "--visuals-host", "start", "--visuals-retarget", "1",
-            "--visuals-vegetation", "none", "--visuals-vista", "1", "--visuals-textured", "1",
+            "--native-foliage", _c.NativeFoliage ? "1" : "0",
+            "--visuals-vegetation", _c.Vegetation, "--visuals-vista", "1", "--visuals-textured", "1",
             "--visuals-dr2", "1", "--visuals-canopies", "apex", "--visuals-terrain-uv", "box",
             "--visuals-ground", "render", "--visuals-ground-lod", "1",
             "--sky", cfg("sky.toml"), "--sky-section", s.Sky,

@@ -181,7 +181,13 @@ internal static class StageBuild
         if (o.Named.GetValueOrDefault("scenery") is { } sceneryCfg)
         {
             report["options"]!["scenery"] = sceneryCfg;
-            report["scenery"] = Scenery.Build(legacy, outRoot, Toml.Load(sceneryCfg), o.Usmap, o.Named.GetValueOrDefault("scenery-actor-hidden") == "1");
+            var scenery = Toml.Load(sceneryCfg);
+            // v1.13 (NativeFoliage): DR2's plants as ACR's own instanced foliage on Hafren's reused PCG stamp components
+            bool nativeFoliage = scenery["native_foliage"].Count > 0 && o.Named.GetValueOrDefault("native-foliage") == "1" && objectShapes is not null;
+            var keep = nativeFoliage ? NativeFoliage.Hosts(scenery).actors : null;
+            report["scenery"] = Scenery.Build(legacy, outRoot, scenery, o.Usmap, o.Named.GetValueOrDefault("scenery-actor-hidden") == "1", keep);
+            if (nativeFoliage)
+                report["native_foliage"] = NativeFoliage.Build(o, Path.Combine(outRoot, Scenery.Persistent + ".umap"), scenery, ir, pl, objectShapes!);
         }
         if (o.Named.GetValueOrDefault("names") is { } namesCfg)
         {

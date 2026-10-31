@@ -4,6 +4,7 @@
 mod cache;
 mod diff;
 mod engine;
+mod live;
 mod process;
 mod schema;
 mod steam;
@@ -118,6 +119,22 @@ enum Cmd {
         /// Accept a cached file that has not passed `validate`.
         #[arg(long)]
         unvalidated: bool,
+    },
+    /// Read-only look at live objects in the running game whose name contains one of the texts (attach only).
+    Live {
+        /// Text the object name must contain (case-insensitive); repeatable.
+        #[arg(long, required = true)]
+        find: Vec<String>,
+        /// Extra reflected property names to print.
+        #[arg(long)]
+        prop: Vec<String>,
+        /// Print offsets of doubles within 1 of this value (repeatable).
+        #[arg(long, allow_hyphen_values = true)]
+        near: Vec<f64>,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        #[arg(long)]
+        signatures: Option<PathBuf>,
     },
     /// Header, counts and selected types of a usmap file.
     Inspect {
@@ -504,6 +521,11 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Inspect { usmap, r#struct, r#enum, find } => cmd_inspect(usmap, r#struct, r#enum, find),
+        Cmd::Live { find, prop, near, limit, signatures } => {
+            let (sigs, _) = load_signatures(signatures)?;
+            let pid = single_pid(&sigs.module.name)?;
+            live::run(&sigs, pid, &find, &prop, &near, limit)
+        }
         Cmd::Diff { a, b, limit, strict } => {
             let (_, sa) = load(&a)?;
             let (_, sb) = load(&b)?;

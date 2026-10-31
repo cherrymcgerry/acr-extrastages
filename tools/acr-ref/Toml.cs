@@ -48,9 +48,26 @@ internal sealed class Toml
         if (v.StartsWith('"') && v.EndsWith('"') && v.Length >= 2) return v[1..^1];
         if (v is "true" or "false") return v == "true";
         if (v.StartsWith('[') && v.EndsWith(']'))
-            return v[1..^1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(x => Value(x, where)).ToArray();
+            return SplitTopLevel(v[1..^1]).Select(x => Value(x, where)).ToArray();
         if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)) return d;
         throw new FormatException($"{where}: unsupported value {v}");
+    }
+
+    /// Array elements: split on commas outside quoted strings.
+    static IEnumerable<string> SplitTopLevel(string s)
+    {
+        int start = 0;
+        bool q = false;
+        for (int i = 0; i <= s.Length; i++)
+        {
+            if (i < s.Length && s[i] == '"') q = !q;
+            if (i == s.Length || s[i] == ',' && !q)
+            {
+                var part = s[start..i].Trim();
+                if (part.Length > 0) yield return part;
+                start = i + 1;
+            }
+        }
     }
 
     Dictionary<string, object> Section(string name)

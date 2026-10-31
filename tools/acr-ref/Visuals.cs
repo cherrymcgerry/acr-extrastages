@@ -256,8 +256,17 @@ internal static class Visuals
                 if (d is null) noTex[mat] = w!;
                 return objDiffuse[mat] = d;
             }
+            // billboard atlas frames per template: <template>_lod_d.dds, frames side by side (width / height); 0 = none
+            int Frames(string template)
+            {
+                var f = Path.Combine(ir.Dir, "textures", template + "_lod_d.dds");
+                if (!System.IO.File.Exists(f)) return 0;
+                try { var d = new Dds(f); return d.Height > 0 && d.Width % d.Height == 0 ? d.Width / d.Height : 0; }
+                catch (Exception e) when (e is InvalidDataException or NotSupportedException) { return 0; }
+            }
             var (objSecs, objRep) = VisualObjects.Build(ir, pl, cfg, objects, inPhysicsBounds, opt.Vegetation, opt.Canopies,
-                                                        objJson is null ? null : m => Diffuse(m) is not null);
+                                                        objJson is null ? null : m => Diffuse(m) is not null,
+                                                        opt.Vegetation == "billboards" && dr2 is not null ? Frames : null);
             foreach (var cls in VisualObjects.Classes.Where(c => objSecs[c].Idx.Count > 0))
             {
                 sections.Add(objSecs[cls]); mats.Add(Mat("object_materials", cls)); sectionNames.Add($"objects:{cls}");
@@ -268,6 +277,11 @@ internal static class Visuals
                 var mat = key[VisualObjects.Dr2Prefix.Length..];
                 drawn.Add(mat);
                 sections.Add(s); mats.Add(MatPath(dr2!.ObjectMic(Diffuse(mat)!))); sectionNames.Add($"objects:{key}");
+            }
+            foreach (var (key, s) in objSecs.Where(kv => kv.Key.StartsWith(VisualObjects.BillboardPrefix) && kv.Value.Idx.Count > 0).OrderBy(kv => kv.Key))
+            {
+                var template = key[VisualObjects.BillboardPrefix.Length..];
+                sections.Add(s); mats.Add(MatPath(dr2!.FoliageMic("bb_" + template, dr2.Texture(template + "_lod_d")))); sectionNames.Add($"vegetation:{template}");
             }
             if (objJson is not null)
                 dr2Rep["objects"] = new JsonObject
@@ -416,10 +430,12 @@ internal static class Visuals
             var texImports = Enumerable.Range(0, mp.ImportCount).Where(i => mp.ImportClassName(i) == "Texture2D").ToList();
             // a round trip of our container alone cannot name the parent (another container): retoc writes it as
             // /Engine/UnknownPackage.UnknownExport; stage-verify resolves it to M_Simple through the game's containers
-            var parent = Enumerable.Range(0, mp.ImportCount).FirstOrDefault(i => mp.ImportClassName(i) == "Material" && mp.ImportName(i) == "M_Simple"
+            // foliage billboards (MI_bb_*): M_TreelineMaster child with base colour + normal
+            bool foliage = mic[(mic.LastIndexOf('/') + 1)..].StartsWith("MI_bb_");
+            var parent = Enumerable.Range(0, mp.ImportCount).FirstOrDefault(i => mp.ImportClassName(i) == "Material" && mp.ImportName(i) == (foliage ? "M_TreelineMaster" : "M_Simple")
                                                                                  || mp.ImportName(i) == "UnknownExport", -1);
             bool ok = mp.ExportCount == 1 && mp.ExportClass(0) == "MaterialInstanceConstant" && mp.PackageName == mic && mp.ExportName(0) == mic[(mic.LastIndexOf('/') + 1)..]
-                      && texImports.Count == 3 && parent >= 0;
+                      && texImports.Count == (foliage ? 2 : 3) && parent >= 0;
             foreach (var t in texImports)
             {
                 string tp = mp.ImportName(-mp.ImportOuter(t) - 1);
@@ -442,7 +458,7 @@ internal static class Visuals
             if (ok) micOk++; else problems.Add($"{mic}: MIC layout");
         }
         C(problems.Count == 0 && micOk == mics.Count && texOk == textures.Count && (mics.Count > 0) == Options.Dr2Sections.Any(opt.Dr2On),
-          $"dr2: {mics.Count} MICs (parent M_Simple, 3 texture imports each) and {textures.Count} textures resolve in the container; every mip inline at its data resource" +
+          $"dr2: {mics.Count} MICs (parent M_Simple with 3 texture imports, or M_TreelineMaster with 2 for billboards) and {textures.Count} textures resolve in the container; every mip inline at its data resource" +
           (problems.Count > 0 ? $"; {string.Join("; ", problems.Take(5))}" : ""));
         return failures;
     }
@@ -512,6 +528,8 @@ internal static class Visuals
             {
                 var name = names[i]!.GetValue<string>();
                 if (name is "dummy" or "terrain" or "road" or "gates" || name.StartsWith("terrain:")) continue;
+                // billboards: masked foliage, not solid, base off the road surface (VisualObjects drops the others)
+                if (name.StartsWith("vegetation:")) continue;
                 bool soft = name == "objects:soft", isPosts = name == "posts";
                 double limit = isPosts ? cfg.Num("markers", "post_width_m") * 75 : soft ? 0 : probe.MaxPen + tol;
                 var s = secs[i];
@@ -545,7 +563,10 @@ internal static class Visuals
             }
             C(true, $"visuals road corridor: {colliders.Count} kept colliders reach over the road above car height (listed in the report)");
             C(opt.Vegetation == "crowns" || !names.Any(x => x!.GetValue<string>() == "objects:soft"),
-              $"visuals: vegetation {opt.Vegetation}: {(names.Any(x => x!.GetValue<string>() == "objects:soft") ? "crown section present" : "no non-solid section")}");
+              $"visuals: vegetation {opt.Vegetation}: {(names.Any(x => x!.GetValue<string>() == "objects:soft") ? "crown section present" : "no crown section")}");
+            int bbSections = names.Count(x => x!.GetValue<string>().StartsWith("vegetation:"));
+            C((opt.Vegetation == "billboards") == (bbSections > 0) || opt.Vegetation == "native" && bbSections == 0,
+              $"visuals: vegetation {opt.Vegetation}: {bbSections} billboard sections ({visualsReport["objects"]?["billboards"]?["drawn"] ?? 0} plants, base never on the road surface)");
             if (visualsReport["objects"] is { } or)
             {
                 double maxExt = cfg.Num("objects", "max_object_extent_m"), largest = or["largest_extent_m"]!.GetValue<double>();

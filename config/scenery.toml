@@ -16,3 +16,15 @@ hidden_layer = "DataLayer_C2CDF8EA4FD154BD45E63F93ACB7BD69"
 hide_actor_classes = ["WorldPartitionHLOD", "BP_TreelinesContainer_C", "BC_MyhTurbineA_C"]
 # actors any of whose components reference a mesh matching one of these
 hide_meshes = ["^SM_WalesS4HafrenSouthTerrain", "^SM_S4HafrensSouthBG", "^SM_(Spruce|Larch|Beech)", "^SM_Treeline"]
+
+[native_foliage]
+# v1.13 (stage-build --native-foliage 1; NativeFoliage.cs): DR2's plants drawn as ACR's own instanced foliage. Hafren's
+# PCG stamp components in the persistent level (service-park trees, tagged ServicePark) are reused as hosts: each gets
+# one ACR mesh and the DR2 plants mapped to it; hosts left over are emptied. Every HISM of a host actor must be listed.
+hosts = ["PCGStamp_3d3e525db80efa5b_4/HISM_SM_SpruceWales01_0", "PCGStamp_3d3e525db80efa5b_3/HISM_SM_SpruceWales01_0", "PCGStamp_3d3e525db80efa5b_2/HISM_SM_SpruceWales01_0", "PCGStamp_3d3e525db80efa5b_2/HISM_SM_SpruceWales01_1", "PCGStamp_3d3e525db80efa5b_14/HISM_SM_SpruceWales06_1", "PCGStamp_3d3e525db80efa5b_22/HISM_SM_SpruceWales06_1", "PCGStamp_3d3e525db80efa5b_8/HISM_SM_SpruceWales01_3", "PCGStamp_3d3e525db80efa5b_8/HISM_SM_SpruceWales06_2", "PCGStamp_3d3e525db80efa5b_9/HISM_SM_BeechBare02_5", "PCGStamp_3d3e525db80efa5b_9/HISM_SM_BeechBare03_4", "PCGStamp_3d3e525db80efa5b_9/HISM_SM_SpruceWales08_6"]
+# "<DR2 template regex> => <ACR mesh>, <ACR mesh> [; clump <max plants>]": first match wins; sized to the DR2 plant's
+# height; a clump scatters up to that many ACR plants over the DR2 plant's footprint (bushes, grasses)
+species = ["^pohutukawa_0[0-9]_ => /Game/Foliage/Trees/Olivetree/SM_Olivetree01, /Game/Foliage/Trees/Olivetree/SM_Olivetree03", "^(maple|ash)_ => /Game/Foliage/Trees/Blackmaple/SM_Blackmaple02", "^poplar_ => /Game/Foliage/Trees/Silverbirch/SM_Silverbirch12", "^pohutukawa_bush_ => /Game/Foliage/Trees/Hedge/SM_Hedge02, /Game/Foliage/Trees/Smoketree/SM_Smoketree02; clump 3", "^hawthorn_bush_ => /Game/Foliage/Trees/Smoketree/SM_Smoketree02, /Game/Foliage/Trees/Silverbirch/SM_Silverbirch08; clump 3", "^(pampas_grass|harakeke)_ => /Game/Foliage/GroundCover/Greece/HighGrass/SM_HighGrass_01; clump 4", "^fern_large_ => /Game/Foliage/Trees/Smoketree/SM_Smoketree02; clump 2", "^(tree_fern|banana_palm)_ => /Game/Foliage/Trees/Smoketree/SM_Smoketree04"]
+min_centreline_offset_m = 4      # plants closer to the DR2 centreline are dropped (and any on a road surface)
+leaf_instances = 16              # cluster tree leaf size
+drop_tags = ["ServicePark"]      # ACR hides actors with this tag during a stage (acr-mappings live)

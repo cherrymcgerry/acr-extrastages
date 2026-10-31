@@ -215,7 +215,7 @@ internal sealed class Tex
         return new Tex(px, w, h);
     }
 
-    static byte[] DecodeBc7(byte[] blocks, int w, int h)
+    public static byte[] DecodeBc7(byte[] blocks, int w, int h)
     {
         var dec = new BCnEncoder.Decoder.BcDecoder();
         var px = dec.DecodeRaw(blocks, w, h, BCnEncoder.Shared.CompressionFormat.Bc7);
