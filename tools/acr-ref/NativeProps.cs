@@ -23,32 +23,36 @@ namespace AcrRef;
 /// the visuals (so they know what is replaced) and applied to the persistent level after the scenery step.
 internal static class NativeProps
 {
-    sealed record Rule(Regex Template, string[] Meshes, string Fit, bool Instanced, string Text);
+    sealed record Rule(Regex Template, string[] Meshes, string Fit, bool Instanced, string? Material, string Text);
 
     static List<Rule> Rules(Toml cfg) => cfg.Arr("native_props", "rules").Cast<string>().Select(s =>
     {
-        // "<template regex> => <mesh>, <mesh> [; fit none|height|size|length] [; instanced]"
+        // "<template regex> => <mesh>, <mesh> [; fit none|height|size|length] [; instanced] [; material <MI path>]"
         var parts = s.Split(';').Select(x => x.Trim()).ToArray();
         var m = Regex.Match(parts[0], @"^(.+?)\s*=>\s*(.+)$");
         if (!m.Success) throw new ArgumentException($"[native_props] rule not understood: {s}");
-        string fit = "none"; bool inst = false;
+        string fit = "none"; bool inst = false; string? mat = null;
         foreach (var opt in parts.Skip(1))
         {
             if (opt == "instanced") inst = true;
+            else if (Regex.Match(opt, @"^material\s+(/Game/\S+)$") is { Success: true } mm) mat = mm.Groups[1].Value;
             else if (Regex.Match(opt, @"^fit\s+(none|height|size|length)$") is { Success: true } f) fit = f.Groups[1].Value;
             else throw new ArgumentException($"[native_props] rule option not understood: {opt} in {s}");
         }
         if (!inst && fit != "none") throw new ArgumentException($"[native_props] single (not instanced) props are placed at scale 1: {s}");
-        return new Rule(new Regex(m.Groups[1].Value), m.Groups[2].Value.Split(',').Select(x => x.Trim()).ToArray(), fit, inst, s);
+        if (inst && mat is not null) throw new ArgumentException($"[native_props] material is for single props (a host's OverrideMaterials slot): {s}");
+        return new Rule(new Regex(m.Groups[1].Value), m.Groups[2].Value.Split(',').Select(x => x.Trim()).ToArray(), fit, inst, mat, s);
     }).ToList();
 
-    public sealed record Single(string Id, MeshInfo Mesh, V3 At, double Yaw, double Dist);
-    internal sealed record Host(int Comp, int Actor, string Name);
+    public sealed record Single(string Id, MeshInfo Mesh, V3 At, double Yaw, double Dist, string? Material);
+    /// A service-park host; Override: it has an OverrideMaterials array (rewritten: slot 0 = the rule's material or
+    /// none, the other slots none, so the mesh's own materials show).
+    internal sealed record Host(int Comp, int Actor, string Name, bool Override);
 
     public sealed class Plan
     {
         public readonly HashSet<string> Replaced = new();
-        public bool HideMarkers;
+        public bool HideMarkers, HideFlatColours;
         public readonly Dictionary<string, MeshInfo> Meshes = new();
         public readonly Dictionary<string, List<Plant>> Instanced = new();
         public readonly List<Single> Singles = new();
@@ -65,7 +69,7 @@ internal static class NativeProps
 
     public static Plan Make(Options o, string legacyPersistent, Toml cfg, StageBuild.Ir ir, StageBuild.Placement pl, ObjectColliders.Result objs)
     {
-        var plan = new Plan { HideMarkers = Opt(cfg, "hide_markers", 1) != 0 };
+        var plan = new Plan { HideMarkers = Opt(cfg, "hide_markers", 1) != 0, HideFlatColours = Opt(cfg, "hide_flat_colours", 1) != 0 };
         var rules = Rules(cfg);
         using var provider = Program.Open(o);
         foreach (var path in rules.SelectMany(r => r.Meshes).Distinct()) plan.Meshes[path] = NativeFoliage.LoadMesh(provider, path);
@@ -118,7 +122,7 @@ internal static class NativeProps
                 double yaw = Math.Atan2(u.Y, u.X) * 180 / Math.PI - (meshLongX ? 0 : 90);
                 double cy = Math.Cos(yaw * Math.PI / 180), sy = Math.Sin(yaw * Math.PI / 180);
                 var at = new V3(p0.X - (cy * mesh.Origin.X - sy * mesh.Origin.Y), p0.Y - (sy * mesh.Origin.X + cy * mesh.Origin.Y), p0.Z);
-                singles.Add((new Single(id, mesh, at, yaw, DistToCentre(p0)), rule.Text));
+                singles.Add((new Single(id, mesh, at, yaw, DistToCentre(p0), rule.Material), rule.Text));
                 continue;
             }
             int k = 1; double sL = 1, sS = 1, sH = 1;
@@ -176,45 +180,64 @@ internal static class NativeProps
             if (tags is not ["ServicePark"]) continue;
             int ci = Enumerable.Range(0, pkg.ExportCount).FirstOrDefault(i => pkg.ExportOuter(i) == a + 1 && pkg.ExportClass(i) == "StaticMeshComponent", -1);
             if (ci < 0) { rejected["no StaticMeshComponent"] = rejected.GetValueOrDefault("no StaticMeshComponent") + 1; continue; }
-            var why = HostProblem(pkg, ci, JsonNode.Parse(JsonConvert.SerializeObject(exports[ci]))!["Properties"]!, out _);
+            var cprops = JsonNode.Parse(JsonConvert.SerializeObject(exports[ci]))!["Properties"]!;
+            var why = HostProblem(pkg, ci, cprops, out _);
             if (why is not null) { rejected[why] = rejected.GetValueOrDefault(why) + 1; continue; }
-            plan.Hosts.Add(new Host(ci, a, pkg.ExportName(a)));
+            plan.Hosts.Add(new Host(ci, a, pkg.ExportName(a), cprops["OverrideMaterials"] is not null));
         }
+        // nearest the road first; props that need a material take hosts with an OverrideMaterials slot
         var placed = singles.OrderBy(x => x.s.Dist).Take(plan.Hosts.Count).ToList();
+        var withOverride = new Queue<Host>(plan.Hosts.Where(h => h.Override));
+        var plain = new Queue<Host>(plan.Hosts.Where(h => !h.Override));
+        var hostsInOrder = new List<Host>();
+        var noOverrideLeft = new List<string>();
+        foreach (var x in placed.ToList())
+        {
+            if (x.s.Material is not null)
+            {
+                if (withOverride.Count > 0) { hostsInOrder.Add(withOverride.Dequeue()); continue; }
+                noOverrideLeft.Add(x.s.Id); placed.Remove(x); continue;
+            }
+            hostsInOrder.Add(plain.Count > 0 ? plain.Dequeue() : withOverride.Dequeue());
+        }
+        plan.Hosts = hostsInOrder;
         plan.Singles.AddRange(placed.Select(x => x.s));
         foreach (var x in placed) plan.Replaced.Add(x.s.Id);
         var singleRules = placed.GroupBy(x => x.rule).ToDictionary(g => g.Key, g => g.Count());
 
-        // grass: wide wild-grass clumps on the DR2 ground beside the road
+        // grass: clumps scattered at random beside the road (density grass_per_100m2, ramping up from grass_min_offset_m
+        // over grass_ramp_m), on DR2 ground no steeper than grass_max_slope_deg, the whole clump off road surfaces
         var ground = new SurfaceGrid(Path.Combine(ir.Dir, "collision.glb"), pl);
         var grassMesh = cfg.Str("native_props", "grass_mesh");
-        double gStep = Opt(cfg, "grass_spacing_m", 3.5) * 100, gMin = Opt(cfg, "grass_min_offset_m", 3) * 100, gMax = Opt(cfg, "grass_max_offset_m", 18) * 100;
-        double gSlope = Math.Tan(Opt(cfg, "grass_max_slope_deg", 35) * Math.PI / 180);
-        if (gStep > 0)
+        double density = Opt(cfg, "grass_per_100m2", 20) / 1e6, gMin = Opt(cfg, "grass_min_offset_m", 3) * 100, gMax = Opt(cfg, "grass_max_offset_m", 18) * 100;
+        double ramp = Opt(cfg, "grass_ramp_m", 4) * 100, gSlope = Math.Tan(Opt(cfg, "grass_max_slope_deg", 35) * Math.PI / 180);
+        int gDropped = 0;
+        if (density > 0)
         {
-            plan.Meshes[grassMesh] = NativeFoliage.LoadMesh(provider, grassMesh);
+            var gm = plan.Meshes[grassMesh] = NativeFoliage.LoadMesh(provider, grassMesh);
+            double rad = Math.Max(gm.Extent.X, gm.Extent.Y) * 1.2;
             var grng = new Random(12345);
-            double along = 0;
             for (int i = 0; i + 1 < centre.Count; i++)
             {
                 var a = centre[i]; var b = centre[i + 1];
                 var d = new V3(b.X - a.X, b.Y - a.Y, 0); double len = d.Length;
                 if (len < 1) continue;
                 var dir = d * (1 / len); var nrm = new V3(-dir.Y, dir.X, 0);
-                for (; along < len; along += gStep)
-                    foreach (int side in new[] { -1, 1 })
-                        for (double off = gMin; off <= gMax; off += gStep)
-                        {
-                            double jo = off + (grng.NextDouble() - 0.5) * gStep * 0.8, ja = along + (grng.NextDouble() - 0.5) * gStep * 0.8;
-                            var q = new V3(a.X + dir.X * ja + nrm.X * side * jo, a.Y + dir.Y * ja + nrm.Y * side * jo, 0);
-                            double yaw = grng.NextDouble() * 360, sc = 0.8 + 0.4 * grng.NextDouble();
-                            if (objs.Probe.OnRoadSurface(q.X, q.Y) || DistToCentre(q) < gMin) continue;
-                            if (ground.HeightAt(q.X / 100, q.Y / 100) is not { } h) continue;
-                            double hx = ground.HeightAt((q.X + 100) / 100, q.Y / 100) ?? h, hy = ground.HeightAt(q.X / 100, (q.Y + 100) / 100) ?? h;
-                            if (Math.Max(Math.Abs(hx - h), Math.Abs(hy - h)) > gSlope) continue;
-                            plan.Grass.Add(Plant.Yawed(q with { Z = h * 100 - 3 }, yaw, sc, sc));
-                        }
-                along -= len;
+                int n = (int)Math.Round(len * 2 * (gMax - gMin) * density);
+                for (int k = 0; k < n; k++)
+                {
+                    double ja = grng.NextDouble() * len, jo = gMin + grng.NextDouble() * (gMax - gMin), side = grng.Next(2) * 2 - 1;
+                    double yaw = grng.NextDouble() * 360, sc = 0.7 + 0.6 * grng.NextDouble(), keep = grng.NextDouble();
+                    var q = new V3(a.X + dir.X * ja + nrm.X * side * jo, a.Y + dir.Y * ja + nrm.Y * side * jo, 0);
+                    double dc = DistToCentre(q);
+                    if (dc < gMin || keep > Math.Clamp((dc - gMin) / ramp, 0.15, 1)) continue;
+                    double r = rad * sc;
+                    if (new[] { (0.0, 0.0), (r, 0), (-r, 0), (0, r), (0, -r) }.Any(o => objs.Probe.OnRoadSurface(q.X + o.Item1, q.Y + o.Item2))) { gDropped++; continue; }
+                    if (ground.HeightAt(q.X / 100, q.Y / 100) is not { } h) continue;
+                    double hx = ground.HeightAt((q.X + 100) / 100, q.Y / 100) ?? h, hy = ground.HeightAt(q.X / 100, (q.Y + 100) / 100) ?? h;
+                    if (Math.Max(Math.Abs(hx - h), Math.Abs(hy - h)) > gSlope) continue;
+                    plan.Grass.Add(Plant.Yawed(q with { Z = h * 100 - 3 }, yaw, sc, sc));
+                }
             }
         }
 
@@ -223,12 +246,13 @@ internal static class NativeProps
             ["dr2_objects_matched"] = new JsonObject(perRule.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)kv.Value))),
             ["instanced"] = new JsonArray(plan.Instanced.Select(kv => (JsonNode?)$"{plan.Meshes[kv.Key].Name} x {kv.Value.Count}").ToArray()),
             ["instanced_not_hosted"] = notHosted,
-            ["single_hosts"] = plan.Hosts.Count, ["single_hosts_rejected"] = new JsonObject(rejected.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)kv.Value))),
+            ["single_hosts"] = plain.Count + withOverride.Count + hostsInOrder.Count, ["singles_needing_a_material_slot_unplaced"] = noOverrideLeft.Count,
+            ["single_hosts_rejected"] = new JsonObject(rejected.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)kv.Value))),
             ["singles_placed"] = new JsonObject(singleRules.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)kv.Value))),
             ["singles_without_host"] = singles.Count - placed.Count,
             ["singles_farthest_placed_m"] = placed.Count > 0 ? Math.Round(placed[^1].s.Dist / 100, 1) : null,
             ["replaced_dr2_objects"] = plan.Replaced.Count,
-            ["grass_clumps"] = plan.Grass.Count,
+            ["grass_clumps"] = plan.Grass.Count, ["grass_dropped_touching_road"] = gDropped,
             ["hide_markers"] = plan.HideMarkers,
         };
         return plan;
@@ -236,10 +260,9 @@ internal static class NativeProps
 
     /// Why a service-park StaticMeshComponent cannot host a prop (null: it can); the offsets of its location, rotation
     /// and StaticMesh reference.
-    static string? HostProblem(LegacyPackage pkg, int ci, JsonNode props, out (int loc, int rot, int mesh, int oldMesh) at)
+    static string? HostProblem(LegacyPackage pkg, int ci, JsonNode props, out (int loc, int rot, int mesh, int oldMesh, int om, int[] omIds) at)
     {
         at = default;
-        if (props["OverrideMaterials"] is not null) return "OverrideMaterials";
         if (props["RelativeScale3D"] is not null) return "RelativeScale3D";
         if (props["RelativeLocation"] is not { } loc || props["RelativeRotation"] is not { } rot || props["StaticMesh"] is not { } sm) return "no location, rotation or mesh";
         var d = pkg.GetExportData(ci);
@@ -253,7 +276,19 @@ internal static class NativeProps
         if (oldMesh == 0) return "mesh import not found";
         var mh = NativeFoliage.Find(d, NativeFoliage.Ints(oldMesh));
         if (mh.Count != 1) return "mesh reference not found once";
-        at = (lh[0], rh[0], mh[0], oldMesh);
+        int om = -1; int[] omIds = [];
+        if (props["OverrideMaterials"] is JsonArray oms)
+        {
+            // TArray<UMaterialInterface*>: count, then package indices (0 = none)
+            omIds = oms.Select(x => x is null ? 0 : Enumerable.Range(0, pkg.ImportCount)
+                .Where(i => pkg.ImportName(i) == x["ObjectName"]!.GetValue<string>().Split('\'')[1] && pkg.ImportClassName(i).Contains("Material"))
+                .Select(i => -i - 1).FirstOrDefault()).ToArray();
+            if (omIds.Length == 0) return "empty OverrideMaterials";
+            var oh = NativeFoliage.Find(d, NativeFoliage.Ints([omIds.Length, .. omIds]));
+            if (oh.Count != 1) return "OverrideMaterials not found once";
+            om = oh[0];
+        }
+        at = (lh[0], rh[0], mh[0], oldMesh, om, omIds);
         return null;
     }
 
@@ -306,8 +341,22 @@ internal static class NativeProps
                 imports[s.Mesh.Path] = newMesh = pkg.AddImport("/Script/Engine", "StaticMesh", pkgImp, s.Mesh.Name);
             }
             BinaryPrimitives.WriteInt32LittleEndian(d.AsSpan(at.mesh), newMesh);
+            int newMat = 0;
+            if (at.om >= 0)
+            {
+                if (s.Material is { } mp && !imports.TryGetValue(mp, out newMat))
+                {
+                    int pkgImp = pkg.AddImport("/Script/CoreUObject", "Package", 0, mp);
+                    imports[mp] = newMat = pkg.AddImport("/Script/Engine", "MaterialInstanceConstant", pkgImp, mp[(mp.LastIndexOf('/') + 1)..]);
+                }
+                for (int k = 0; k < at.omIds.Length; k++) BinaryPrimitives.WriteInt32LittleEndian(d.AsSpan(at.om + 4 + 4 * k), k == 0 ? newMat : 0);
+            }
+            else if (s.Material is not null) throw new InvalidDataException($"{h.Name}: {s.Id} needs a material slot");
             pkg.SetExportData(h.Comp, d);
             foreach (var dep in pkg.ExportDeps(h.Comp).Where(x => x.index == at.oldMesh)) pkg.SetDep(dep.pos, newMesh);
+            // the first old override material's preload dependency now loads the new material
+            if (newMat != 0 && at.omIds[0] != 0)
+                foreach (var dep in pkg.ExportDeps(h.Comp).Where(x => x.index == at.omIds[0]).Take(1)) pkg.SetDep(dep.pos, newMat);
             NativeFoliage.DropTags(pkg, h.Actor, drop, none, h.Name);
         }
         pkg.SaveTo(persistentFile);

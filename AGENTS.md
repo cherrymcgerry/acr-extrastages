@@ -81,7 +81,16 @@ Texture2D + MaterialInstanceConstant packages cloned from cooked templates (Drop
     export) and its preload dep retargeted, the actor's tag renamed. Scale stays 1: pick the mesh variant that fits.
   - The plan is made before the visuals so replaced DR2 instances are left out of the procedural mesh
     (`VisualObjects`, `replaced`); colliders stay in BakedData. `hide_markers` drops the build's edge posts and gates.
-  - Steep ground (`--visuals-steep`, `[dr2_textures] steep*`): faces over 40 deg get a stony DR2 slice, box-projected.
+  - Some ACR meshes ship with the engine's WorldGridMaterial and get their real material from a blueprint (the
+    gantries: `BC_Gantry*`, `MI_RallyGantry<Country>`). Rule option `material` writes it into a host's OverrideMaterials
+    slot (hosts with that array are used for it; their other slots are set to none so the mesh's own materials show).
+  - Ground cover whose MI has `UseRVTBaseColor` (e.g. MI_WildGrass01) renders black here: these stages have no
+    landscape runtime virtual texture. Use a non-RVT one (SM_WildGrassServicePark, HighGrass). Check with
+    `acr-ref export <MI>` (StaticParametersRuntime).
+  - `hide_flat_colours`: DR2 objects with neither an ACR prop nor a DR2 texture are not drawn (colliders stay); a check
+    fails if any flat class colour is drawn within 30 m of the road.
+  - Steep ground (`--visuals-steep`, `[dr2_textures] steep*`): faces over 40 deg get ACR's tileable rock texture
+    (`steep_acr_texture`, referenced from a new M_Simple MIC) or a DR2 slice, box-projected every `steep_tile_m`.
   - Choose meshes by shape with `acr-ref mesh-thumbs --filter <regex> --out sheet.png` (LOD0 / Nanite fallback, flat
     shaded, red tick +X, green +Y; blue panels are masked materials such as wire mesh).
 - **Names:** new FNames used from export data must go inside `NamesReferencedFromExportDataCount`

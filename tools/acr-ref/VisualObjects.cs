@@ -40,7 +40,8 @@ internal static class VisualObjects
     /// material, with the glb's TEXCOORD_0; everything else stays in the class sections as before.
     public static (Dictionary<string, ProcMesh.Section> sections, JsonObject report) Build(
         StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ObjectColliders.Result objs, Func<V3, bool> inPhysicsBounds, string vegetation, string? canopies = null,
-        Func<string, bool>? dr2Materials = null, Func<string, int>? billboardFrames = null, ISet<string>? replaced = null)
+        Func<string, bool>? dr2Materials = null, Func<string, int>? billboardFrames = null, ISet<string>? replaced = null,
+        bool hideFlatColours = false)
     {
         int maxMeshTris = (int)cfg.Num("objects", "max_mesh_triangles");
         int sides = (int)cfg.Num("objects", "prism_sides");
@@ -71,7 +72,9 @@ internal static class VisualObjects
         var stage = JsonNode.Parse(File.ReadAllText(Path.Combine(ir.Dir, "stage.json")))!["objects"]!;
         var templates = stage["templates"]!.AsObject();
         var treeClasses = cfg.Arr("objects", "tree_shape_classes").Cast<string>().ToHashSet();
-        int nativeProps = 0;
+        int nativeProps = 0, flatHidden = 0, flatNearRoad = 0;
+        var centreUe = ir.Centre.Select(pl.ToUe).ToList();
+        double nearRoad = 3000;   // cm: flat-coloured objects this close to the centreline are counted (checked in hide mode)
         int instances = 0, outside = 0, noMesh = 0, meshInstances = 0, proxyInstances = 0, notSolid = 0, treeInstances = 0;
         int alignChecked = 0, misaligned = 0, crownsDrawn = 0, crownsDropped = 0;
         var perTemplate = new SortedDictionary<string, string>();
@@ -220,10 +223,11 @@ internal static class VisualObjects
             {
                 meshInstances++;
                 var cls = shapes.GroupBy(s => ClassOf(s.Material)).OrderByDescending(g => g.Count()).First().Key;
-                if (dr2Materials is null) AddMesh(sec[cls], mesh, m, pl, Ue);
+                // v1.14 hideFlatColours: triangles without a DR2 texture are left out instead of drawn in the class colour
+                if (dr2Materials is null) { if (!hideFlatColours) AddMesh(sec[cls], mesh, m, pl, Ue); else flatHidden++; }
                 else
                 {
-                    int n = AddMeshSplit(t => sec.GetValueOrDefault(Dr2Prefix + mesh.TriMaterial[t]) ?? sec[cls], t => sec.ContainsKey(Dr2Prefix + mesh.TriMaterial[t]), mesh, m, Ue);
+                    int n = AddMeshSplit(t => sec.GetValueOrDefault(Dr2Prefix + mesh.TriMaterial[t]) ?? (hideFlatColours ? null : sec[cls]), t => sec.ContainsKey(Dr2Prefix + mesh.TriMaterial[t]), mesh, m, Ue);
                     dr2Tris += n; if (n > 0) dr2Instances++;
                 }
                 var (bmn, bmx) = WorldBox(mesh.Min, mesh.Max, m, Ue);
@@ -236,6 +240,11 @@ internal static class VisualObjects
                 }
                 counts[cls]++;
                 perTemplate.TryAdd(tname, $"render mesh ({mesh.Idx.Length / 3} triangles), {cls}");
+            }
+            else if (shapes.Count > 0 && hideFlatColours)
+            {
+                flatHidden++;
+                perTemplate.TryAdd(tname, "kept shapes not drawn (no flat colours; colliders stay)");
             }
             else if (shapes.Count > 0)
             {
@@ -253,6 +262,13 @@ internal static class VisualObjects
                 perTemplate.TryAdd(tname, "not solid: not drawn");
             }
             else noMesh++;
+
+            // flat class colours drawn near the road (the class sections, not the DR2-textured ones)
+            if (Classes.Any(c => sec[c].Pos.Count > before.GetValueOrDefault(c)))
+            {
+                var o = Ue(origin);
+                if (centreUe.Min(c => (c.X - o.X) * (c.X - o.X) + (c.Y - o.Y) * (c.Y - o.Y)) < nearRoad * nearRoad) flatNearRoad++;
+            }
 
             // drawn plan extent of this instance, against its DR2 render bounds
             var dmn = new Vector3(float.MaxValue); var dmx = new Vector3(float.MinValue);
@@ -290,6 +306,7 @@ internal static class VisualObjects
         var r = new JsonObject
         {
             ["instances"] = instances, ["outside_physics_bounds"] = outside, ["trees"] = treeInstances, ["native_props"] = nativeProps,
+            ["hide_flat_colours"] = hideFlatColours, ["flat_colour_hidden"] = flatHidden, ["flat_colour_instances_within_30m"] = flatNearRoad,
             ["vegetation"] = vegetation,
             ["render_mesh_instances"] = meshInstances, ["shape_proxy_instances"] = proxyInstances,
             ["not_solid_not_drawn"] = notSolid,
@@ -523,7 +540,7 @@ internal static class VisualObjects
 
     /// AddMesh with each triangle routed to target(t); vertices are duplicated per target section and carry the glb UV.
     /// Returns the number of triangles that went to a section where dr2(t) holds.
-    static int AddMeshSplit(Func<int, ProcMesh.Section> target, Func<int, bool> dr2, Mesh mesh, Matrix4x4 m, Func<Vector3, V3> ue)
+    static int AddMeshSplit(Func<int, ProcMesh.Section?> target, Func<int, bool> dr2, Mesh mesh, Matrix4x4 m, Func<Vector3, V3> ue)
     {
         var w = new Vector3[mesh.Pos.Length];
         var u = new Vector3[mesh.Pos.Length];
@@ -535,7 +552,7 @@ internal static class VisualObjects
             uint i0 = mesh.Idx[t], i1 = mesh.Idx[t + 1], i2 = mesh.Idx[t + 2];
             var outDr2 = Vector3.Cross(w[i1] - w[i0], w[i2] - w[i0]);
             if (outDr2.LengthSquared() == 0) continue;
-            var s = target(t / 3);
+            if (target(t / 3) is not { } s) continue;
             if (!maps.TryGetValue(s, out var map)) maps[s] = map = new();
             int V(uint i)
             {

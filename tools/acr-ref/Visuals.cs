@@ -89,7 +89,7 @@ internal static class Visuals
 
     public static JsonObject Build(LegacyPackage cell, StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, Options opt,
                                    ObjectColliders.Result? objects, Func<Splines.V3, bool> inPhysicsBounds, Dr2Materials? dr2 = null,
-                                   ISet<string>? nativeProps = null, bool hideMarkers = false)
+                                   ISet<string>? nativeProps = null, bool hideMarkers = false, bool hideFlatColours = false)
     {
         var r = new JsonObject();
         if (opt.Dr2 && (dr2 is null || !opt.Textured)) throw new ArgumentException("--visuals-dr2 needs --visuals-textured and the DR2 material writer");
@@ -239,9 +239,13 @@ internal static class Visuals
             }
             if (steepSec is { Idx.Count: > 0 })
             {
-                dr2Rep["steep_uv"] = BoxUv(steepSec, (float)(cfg.Num("dr2_textures", "terrain_tile_m") * 100));
-                bakeSections.Add(("terrain:steep", steepSec, MatPath(dr2!.Mic("steep", dr2.Texture(dr2.SteepTexture)))));
-                dr2Rep["steep"] = $"{steepSec.Idx.Count / 3} triangles steeper than {cfg.Num("dr2_textures", "steep_min_deg")} deg on {dr2.SteepTexture}";
+                // an ACR texture (steep_acr_texture, referenced by the new MIC) or the DR2 slice (steep), tiled every steep_tile_m
+                var acrTex = cfg["dr2_textures"].TryGetValue("steep_acr_texture", out var at) && at is string ats && ats.Length > 0 ? ats : null;
+                double tile = cfg["dr2_textures"].TryGetValue("steep_tile_m", out var tm) && tm is double tmd ? tmd : cfg.Num("dr2_textures", "terrain_tile_m");
+                dr2Rep["steep_uv"] = BoxUv(steepSec, (float)(tile * 100));
+                var tex = acrTex ?? dr2!.Texture(dr2!.SteepTexture);
+                bakeSections.Add(("terrain:steep", steepSec, MatPath(dr2!.Mic("steep", tex))));
+                dr2Rep["steep"] = $"{steepSec.Idx.Count / 3} triangles steeper than {cfg.Num("dr2_textures", "steep_min_deg")} deg on {tex}, every {tile} m";
             }
             dr2Rep["terrain"] = $"ground bake {manifest}: {used.Count} tile sections" + (rest.Idx.Count > 0 ? $", {rest.Idx.Count / 3} triangles over no tile on {dr2!.TerrainTexture}" : "");
             dr2Rep["ground_bake"] = brep;
@@ -294,7 +298,7 @@ internal static class Visuals
             }
             var (objSecs, objRep) = VisualObjects.Build(ir, pl, cfg, objects, inPhysicsBounds, opt.Vegetation, opt.Canopies,
                                                         objJson is null ? null : m => Diffuse(m) is not null,
-                                                        opt.Vegetation == "billboards" && dr2 is not null ? Frames : null, nativeProps);
+                                                        opt.Vegetation == "billboards" && dr2 is not null ? Frames : null, nativeProps, hideFlatColours);
             foreach (var cls in VisualObjects.Classes.Where(c => objSecs[c].Idx.Count > 0))
             {
                 sections.Add(objSecs[cls]); mats.Add(Mat("object_materials", cls)); sectionNames.Add($"objects:{cls}");
@@ -467,6 +471,8 @@ internal static class Visuals
             foreach (var t in texImports)
             {
                 string tp = mp.ImportName(-mp.ImportOuter(t) - 1);
+                // v1.14: the steep-bank MIC may reference a game texture (steep_acr_texture); stage-verify resolves it
+                if (cfg["dr2_textures"].TryGetValue("steep_acr_texture", out var sat) && sat is string sats && tp == sats) continue;
                 if (!tp.StartsWith(root + "/") || !System.IO.File.Exists(File(tp))) { ok = false; problems.Add($"{mic}: texture {tp} missing"); continue; }
                 if (!textures.Add(tp)) continue;
                 var tpkg = new LegacyPackage(File(tp));
@@ -604,7 +610,8 @@ internal static class Visuals
                 if (or["shapes_vs_colliders"] is { } sv)
                 {
                     int compared = sv["compared"]!.GetValue<int>(), bad = sv["mismatches"]!.GetValue<int>();
-                    C(compared > 0 && bad == 0, $"visuals: {compared} drawn collider shapes vs their colliders: {bad} outside by > 2 cm or under {cfg.Num("objects", "shape_min_fill")} fill"
+                    bool noneDrawn = or["hide_flat_colours"]?.GetValue<bool>() == true;   // native props: no shapes drawn at all
+                    C((compared > 0 || noneDrawn) && bad == 0, $"visuals: {compared} drawn collider shapes vs their colliders: {bad} outside by > 2 cm or under {cfg.Num("objects", "shape_min_fill")} fill"
                                          + $" (max outside {sv["max_outside_collider_cm"]} cm, min fill {sv["min_fill"]})" + (bad > 0 ? $": {sv["first"]![0]}" : ""));
                 }
                 if (or["canopies"] is { } cn) C(true, $"visuals: canopies {cn}");
@@ -694,6 +701,12 @@ internal static class Visuals
             worst = Math.Max(worst, (ctr - edges[k]).Length());
         }
         double width = ir.Gates.Average(g => Math.Sqrt(Math.Pow(g.left[0] - g.right[0], 2) + Math.Pow(g.left[2] - g.right[2], 2)));
+        // v1.14: with native props no DR2 object may show a flat class colour near the road
+        if (visualsReport?["objects"]?["hide_flat_colours"]?.GetValue<bool>() == true)
+        {
+            int flat = visualsReport["objects"]!["flat_colour_instances_within_30m"]!.GetValue<int>();
+            C(flat == 0, $"visuals: no DR2 object in a flat class colour within 30 m of the centreline ({flat}; {visualsReport["objects"]!["flat_colour_hidden"]} hidden)");
+        }
         if (visualsReport?["edge_posts"]?.GetValue<int>() == 0)
             C(posts.Pos.Count == 3 && secs[4].Pos.Count == 3, "visuals: edge posts and gates left out (native props), one placeholder triangle each");
         else

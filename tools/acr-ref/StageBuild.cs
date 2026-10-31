@@ -193,7 +193,8 @@ internal static class StageBuild
             if (props is not null) (keep ??= new HashSet<string>()).UnionWith(NativeProps.KeepActors(scenery));
             report["scenery"] = Scenery.Build(legacy, outRoot, scenery, o.Usmap, o.Named.GetValueOrDefault("scenery-actor-hidden") == "1", keep);
             if (nativeFoliage)
-                report["native_foliage"] = NativeFoliage.Build(o, Path.Combine(outRoot, Scenery.Persistent + ".umap"), scenery, ir, pl, objectShapes!);
+                report["native_foliage"] = NativeFoliage.Build(o, Path.Combine(outRoot, Scenery.Persistent + ".umap"), scenery, ir, pl, objectShapes!,
+                    props is null ? null : scenery.Arr("native_props", "instanced_hosts").Cast<string>().ToHashSet());
             if (props is not null)
                 report["native_props"] = NativeProps.Apply(o, Path.Combine(outRoot, Scenery.Persistent + ".umap"), scenery, props);
         }
@@ -754,7 +755,8 @@ internal static class StageBuild
             var vopt = Visuals.Options.From(o.Named);
             var vcfg = Toml.Load(visualsCfg);
             var dr2 = vopt.Dr2 ? new Dr2Materials(vcfg, ir.Dir, legacy, outRoot, packageRoot) : null;
-            r["visuals"] = Visuals.Build(cell, ir, pl, vcfg, vopt, objectShapes, InPhysicsBounds, dr2, props?.Replaced, props?.HideMarkers == true);
+            r["visuals"] = Visuals.Build(cell, ir, pl, vcfg, vopt, objectShapes, InPhysicsBounds, dr2, props?.Replaced, props?.HideMarkers == true,
+                                         props?.HideFlatColours == true);
         }
         r["actors"] = actors;
         r["dr2_centre_length_m"] = newLine.Length / 100;

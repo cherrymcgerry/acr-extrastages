@@ -79,10 +79,13 @@ internal static class NativeFoliage
         return (hosts.Select(h => h.Split('/')[0]).ToHashSet(), hosts.ToHashSet());
     }
 
-    public static JsonObject Build(Options o, string persistentFile, Toml cfg, StageBuild.Ir ir, StageBuild.Placement pl, ObjectColliders.Result objs)
+    /// skipHosts: "actor/component" hosts another step rewrites (NativeProps), left alone here.
+    public static JsonObject Build(Options o, string persistentFile, Toml cfg, StageBuild.Ir ir, StageBuild.Placement pl, ObjectColliders.Result objs,
+                                   ISet<string>? skipHosts = null)
     {
         var rules = Rules(cfg);
-        var hosts = cfg.Arr("native_foliage", "hosts").Cast<string>().Select(h => (actor: h.Split('/')[0], comp: h.Split('/')[1])).ToList();
+        var hosts = cfg.Arr("native_foliage", "hosts").Cast<string>().Where(h => skipHosts?.Contains(h) != true)
+            .Select(h => (actor: h.Split('/')[0], comp: h.Split('/')[1])).ToList();
         int leaf = (int)cfg.Num("native_foliage", "leaf_instances");
         double minOffset = cfg.Num("native_foliage", "min_centreline_offset_m") * 100;
 
@@ -371,7 +374,7 @@ internal static class NativeFoliage
         }
 
         // mesh: a new import, the StaticMesh property and its preload dependency retargeted
-        if (mesh is not null)
+        if (mesh is not null && props["StaticMesh"]!["ObjectName"]!.GetValue<string>().Split('\'')[1] != mesh.Name)
         {
             string oldName = props["StaticMesh"]!["ObjectName"]!.GetValue<string>().Split('\'')[1];
             int oldMesh = Enumerable.Range(0, pkg.ImportCount).Where(i => pkg.ImportClassName(i) == "StaticMesh" && pkg.ImportName(i) == oldName).Select(i => -i - 1).First();

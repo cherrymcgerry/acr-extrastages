@@ -126,6 +126,9 @@ road = "nz_ral_set_1_01_d1049518591_slice2"      # road strip: gravel with grass
 # slice, box-projected every terrain_tile_m, instead of the top-down ground bake (which streaks on banks)
 steep = "nz_ral_set_1_01_d1049518591_slice14"
 steep_min_deg = 40
+steep_acr_texture = "/Game/Props/MonteCarloProps/MonBolRockfaces/T_RockSurfaceSbcjgap0_B"   # ACR tileable rock (used
+                                 #   instead of the DR2 slice when set; the M_Simple MIC references it)
+steep_tile_m = 4
 # vista: large colour map (tint) x 2 over the three layers' mean colours mixed by the blend map, baked
 vista_colour_map = "nz_ral_master_vista_cm"
 vista_blend_map = "nz_ral_master_vista_mk"
