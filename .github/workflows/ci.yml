@@ -1,6 +1,7 @@
 name: CI
 
-# Builds and tests everything that needs neither the games nor a .usmap. No stage is built here.
+# Builds and tests everything that needs neither the games nor a .usmap, on Windows and on Linux (Steam + Proton
+# users run the linux-x64 build). No stage is built here.
 
 on:
   push:
@@ -18,8 +19,12 @@ env:
 
 jobs:
   check:
-    name: content guard, build, test
-    runs-on: windows-latest
+    name: content guard, build, test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
 
@@ -32,7 +37,7 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Install Rust (stable)
-        run: rustup toolchain install stable --profile minimal
+        run: rustup toolchain install stable --profile minimal --component rustfmt
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -61,13 +66,20 @@ jobs:
         shell: pwsh
         run: ./scripts/build.ps1
 
+      # The launcher builds for the runner's OS (win-x64: GDI+ logos; linux-x64: SkiaSharp logos).
       - name: Build launcher
         run: dotnet build tools/launcher/AcrExtraStages.csproj -c Release
+
+      - name: Shell scripts (bash -n)
+        if: runner.os == 'Linux'
+        run: bash -n scripts/install-linux.sh
 
       # Rust
       - name: acr-mappings (test, build)
         shell: pwsh
         run: |
+          cargo fmt --check --manifest-path tools/acr-mappings/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'cargo fmt (acr-mappings) failed' }
           cargo test --locked --manifest-path tools/acr-mappings/Cargo.toml
           if ($LASTEXITCODE -ne 0) { throw 'cargo test (acr-mappings) failed' }
           cargo build --release --locked --manifest-path tools/acr-mappings/Cargo.toml
@@ -83,10 +95,14 @@ jobs:
 
   package:
     # Packaging smoke test (everything except the long retoc build); release.yml does the full package on a tag.
-    name: package (smoke test)
+    name: package (smoke test, ${{ matrix.os }})
     if: github.event_name != 'pull_request'
     needs: check
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
 
