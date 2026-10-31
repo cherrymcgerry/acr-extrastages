@@ -35,7 +35,8 @@ height profiles.
 
 ## Requirements
 
-- Windows 10 or 11, 64-bit.
+- Windows 10 or 11, 64-bit, **or** Linux (x86-64) with ACR running through Steam and Proton (see
+  [docs/linux.md](docs/linux.md)).
 - *Assetto Corsa Rally* installed through **Steam**. Early Access builds change often; stages are
   built against the game files you have, so a game update may need a rebuild (see
   [Known limitations](#known-limitations)).
@@ -49,8 +50,9 @@ height profiles.
     deleted afterwards). In total, about **38 GB free** for the recommended 30 and about **90 GB
     free** for all 106. The launcher states the number for whatever you have selected.
     `pwsh scripts\estimate-disk.ps1` prints the same estimate.
-  - on the same NTFS drive as the game: the launcher reads the game's files and installs the
-    stages through hard links instead of copies, so they take no extra space.
+  - on the same drive as the game (NTFS on Windows; the same filesystem on Linux): the launcher
+    reads the game's files and installs the stages through hard links instead of copies, so they
+    take no extra space.
 - An internet connection **once**, so a helper tool can fetch the Oodle compression library it
   needs (see [How it works](#how-it-works)). Generation and play are offline.
 
@@ -84,6 +86,11 @@ height profiles.
 
 After a game update or a new release, choose **Update**: only what changed is rebuilt.
 
+**On Linux** the steps are the same with `ACR-Extra-Stages-<version>-linux-x64.tar.gz`: extract it
+in your home folder (or wherever ACR's Steam library is) and run `./AcrExtraStages` in a terminal.
+To build it from a source checkout, run `scripts/install-linux.sh`. Some distributions need a
+one-time permission for the mappings step; [docs/linux.md](docs/linux.md) has the details.
+
 The same steps run without the menu, for example `AcrExtraStages.exe install --yes`,
 `AcrExtraStages.exe install --only AcrXsNz01r5` or `AcrExtraStages.exe uninstall`
 (`AcrExtraStages.exe --help` lists every option).
@@ -92,7 +99,8 @@ The same steps run without the menu, for example `AcrExtraStages.exe install --y
 
 Use **Uninstall** in `AcrExtraStages.exe`, or delete every file starting with `zz_acrxs_` from
 `<ACR>\acr\Content\Paks\~mods\`, where `<ACR>` is the game folder, usually
-`...\Steam\steamapps\common\Assetto Corsa Rally`. Nothing else is changed. You can then delete
+`...\Steam\steamapps\common\Assetto Corsa Rally` (on Linux usually
+`~/.local/share/Steam/steamapps/common/Assetto Corsa Rally`). Nothing else is changed. You can then delete
 the launcher's working folder to get the disk space back.
 
 If the game ever fails to start after an update, removing the `zz_acrxs_*` files restores the
@@ -122,7 +130,8 @@ you, and is never redistributed here.
   stages stop appearing or the game fails to load them, remove them and rebuild with the latest
   release (see [docs/updating-after-a-patch.md](docs/updating-after-a-patch.md)).
 - **Disk use.** The full set is large (see [Requirements](#requirements)).
-- **Windows only**, and only the Steam release of ACR is tested.
+- **Windows and Linux.** Only the Steam release of ACR is tested. On Linux the game runs through
+  Proton; tested on Bazzite with the native Steam client (see [docs/linux.md](docs/linux.md)).
 - Stages are for **offline** play only.
 
 ## Troubleshooting
