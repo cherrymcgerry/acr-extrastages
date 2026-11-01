@@ -79,6 +79,63 @@ internal static class TexScan
         return 0;
     }
 
+    /// export-bytes &lt;legacy .uasset/.umap&gt; &lt;export index, 0-based&gt; --out &lt;file&gt;: one export's serialized data as is.
+    public static int ExportBytes(Options o)
+    {
+        var pkg = new LegacyPackage(o.Positional[0]);
+        int e = int.Parse(o.Positional[1]);
+        File.WriteAllBytes(o.Out ?? throw new ArgumentException("export-bytes needs --out"), pkg.GetExportData(e));
+        Console.WriteLine($"export {e} {pkg.ExportName(e)} ({pkg.ExportClass(e)}): {pkg.GetExportData(e).Length} bytes -> {o.Out}");
+        return 0;
+    }
+
+    /// data-resources &lt;legacy package&gt;: the bulk data table (FObjectDataResource per entry) with each entry's owner export.
+    public static int DataResources(Options o)
+    {
+        var pkg = new LegacyPackage(o.Positional[0]);
+        var dr = pkg.DataResources();
+        int count = BitConverter.ToInt32(dr, 4);
+        var byOwner = new SortedDictionary<string, (int n, long bytes)>();
+        for (int k = 0; k < count; k++)
+        {
+            var en = dr.AsSpan(8 + k * LegacyPackage.DataResourceSize);
+            long size = BitConverter.ToInt64(en[20..]);
+            int outer = BitConverter.ToInt32(en[36..]);
+            string owner = outer > 0 ? $"{pkg.ExportName(outer - 1)} ({pkg.ExportClass(outer - 1)}, export {outer - 1})" : $"outer {outer}";
+            var cur = byOwner.GetValueOrDefault(owner);
+            byOwner[owner] = (cur.n + 1, cur.bytes + size);
+        }
+        Console.WriteLine($"{count} data resources");
+        foreach (var (owner, v) in byOwner.OrderByDescending(kv => kv.Value.bytes).Take(o.Limit ?? 40)) Console.WriteLine($"  {v.n,4} x {v.bytes,10} bytes  {owner}");
+        return 0;
+    }
+
+    /// mesh-info --filter &lt;regex&gt;: StaticMesh bounds (m), LOD count, LOD0 triangles and Nanite data, e.g. to size
+    /// ACR foliage replacing DR2 plants (NativeFoliage).
+    public static int MeshInfo(Options o)
+    {
+        using var p = Program.Open(o);
+        var re = new Regex(o.Filter ?? ".", RegexOptions.IgnoreCase);
+        int n = 0;
+        foreach (var path in p.Files.Keys.Where(k => k.EndsWith(".uasset") && re.IsMatch(k)).Order())
+        {
+            if (n >= (o.Limit ?? 100)) break;
+            try
+            {
+                var mesh = p.LoadPackage(path).GetExports().OfType<CUE4Parse.UE4.Assets.Exports.StaticMesh.UStaticMesh>().FirstOrDefault();
+                if (mesh?.RenderData is not { } rd) continue;
+                n++;
+                var b = rd.Bounds!;
+                double h = b.BoxExtent.Z * 2 / 100, w = Math.Max(b.BoxExtent.X, b.BoxExtent.Y) * 2 / 100, z0 = (b.Origin.Z - b.BoxExtent.Z) / 100;
+                long tris = rd.LODs is { Length: > 0 } l ? l[0].Sections?.Sum(s => (long)s.NumTriangles) ?? 0 : 0;
+                bool nanite = rd.NaniteResources is not null;
+                Console.WriteLine($"{path}: h {h:0.0} m, w {w:0.0} m, base {z0:0.0} m, LODs {rd.LODs?.Length ?? 0}, LOD0 {tris} tris{(nanite ? ", nanite" : "")}");
+            }
+            catch (Exception e) { Console.WriteLine($"{path}: {e.GetType().Name} {e.Message}"); }
+        }
+        return 0;
+    }
+
     static void Hex(byte[] d, int at, int n)
     {
         for (int i = 0; i < n; i += 16)

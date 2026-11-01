@@ -160,6 +160,8 @@ internal static class StageBuild
             if (vo.Ground != "collision") report["options"]!["visuals_ground"] = vo.Ground;
             if (vo.GroundLod) report["options"]!["visuals_ground_lod"] = true;
             if (vo.GroundBake is not null) report["options"]!["visuals_ground_bake"] = vo.GroundBake;
+            if (vo.Steep) report["options"]!["visuals_steep"] = true;
+            if (vo.GroundDetail) report["options"]!["visuals_ground_detail"] = true;
         }
         var road = Road(ir, pl);
 
@@ -176,12 +178,27 @@ internal static class StageBuild
 
         int hostColliders = BuildBaked(ir, pl, legacy, outRoot, report, objectsCfg is null ? null : Toml.Load(objectsCfg), road, registry, out var objectShapes);
         report["host_collider_count"] = hostColliders;
-        var cellInfo = BuildCell(o, ir, pl, legacy, outRoot, report, respawnMode, road, objectShapes, packageRoot);
+        // v1.14 (NativeProps): which DR2 objects become ACR props, decided before the visuals leave them out
+        var sceneryToml = o.Named.GetValueOrDefault("scenery") is { } sceneryPath ? Toml.Load(sceneryPath) : null;
+        NativeProps.Plan? props = null;
+        if (sceneryToml is not null && sceneryToml["native_props"].Count > 0 && o.Named.GetValueOrDefault("native-props") == "1" && objectShapes is not null)
+            props = NativeProps.Make(o, HostPaths.Resolve(legacy, Scenery.Persistent), sceneryToml, ir, pl, objectShapes);
+        var cellInfo = BuildCell(o, ir, pl, legacy, outRoot, report, respawnMode, road, objectShapes, packageRoot, props);
         BuildTables(o, ir, legacy, outRoot, keepPacenotes, additive, report, pacenoteMap is null ? null : Toml.Load(pacenoteMap), cellInfo);
         if (o.Named.GetValueOrDefault("scenery") is { } sceneryCfg)
         {
             report["options"]!["scenery"] = sceneryCfg;
-            report["scenery"] = Scenery.Build(legacy, outRoot, Toml.Load(sceneryCfg), o.Usmap, o.Named.GetValueOrDefault("scenery-actor-hidden") == "1");
+            var scenery = Toml.Load(sceneryCfg);
+            // v1.13 (NativeFoliage): DR2's plants as ACR's own instanced foliage on Hafren's reused PCG stamp components
+            bool nativeFoliage = scenery["native_foliage"].Count > 0 && o.Named.GetValueOrDefault("native-foliage") == "1" && objectShapes is not null;
+            var keep = nativeFoliage ? NativeFoliage.Hosts(scenery).actors : null;
+            if (props is not null) (keep ??= new HashSet<string>()).UnionWith(NativeProps.KeepActors(scenery));
+            report["scenery"] = Scenery.Build(legacy, outRoot, scenery, o.Usmap, o.Named.GetValueOrDefault("scenery-actor-hidden") == "1", keep);
+            if (nativeFoliage)
+                report["native_foliage"] = NativeFoliage.Build(o, Path.Combine(outRoot, Scenery.Persistent + ".umap"), scenery, ir, pl, objectShapes!,
+                    props is null ? null : scenery.Arr("native_props", "instanced_hosts").Cast<string>().ToHashSet());
+            if (props is not null)
+                report["native_props"] = NativeProps.Apply(o, Path.Combine(outRoot, Scenery.Persistent + ".umap"), scenery, props);
         }
         if (o.Named.GetValueOrDefault("names") is { } namesCfg)
         {
@@ -597,7 +614,7 @@ internal static class StageBuild
     }
 
     static CellInfo BuildCell(Options o, Ir ir, Placement pl, string legacy, string outRoot, JsonObject report, string respawnMode, RoadCorridor road,
-                              ObjectColliders.Result? objectShapes, string? packageRoot = null)
+                              ObjectColliders.Result? objectShapes, string? packageRoot = null, NativeProps.Plan? props = null)
     {
         var path = HostPaths.Resolve(legacy, HostPaths.Cell);
         var cell = new LegacyPackage(path);
@@ -740,7 +757,8 @@ internal static class StageBuild
             var vopt = Visuals.Options.From(o.Named);
             var vcfg = Toml.Load(visualsCfg);
             var dr2 = vopt.Dr2 ? new Dr2Materials(vcfg, ir.Dir, legacy, outRoot, packageRoot) : null;
-            r["visuals"] = Visuals.Build(cell, ir, pl, vcfg, vopt, objectShapes, InPhysicsBounds, dr2);
+            r["visuals"] = Visuals.Build(cell, ir, pl, vcfg, vopt, objectShapes, InPhysicsBounds, dr2, props?.Replaced, props?.HideMarkers == true,
+                                         props?.HideFlatColours == true);
         }
         r["actors"] = actors;
         r["dr2_centre_length_m"] = newLine.Length / 100;
@@ -923,7 +941,8 @@ internal static class StageBuild
                 vo["visuals_vista"]?.GetValue<bool>() ?? false, vo["visuals_textured"]?.GetValue<bool>() ?? false,
                 vo["visuals_dr2"]?.GetValue<bool>() ?? false, vo["visuals_dr2_revert"]?.GetValue<string>() ?? "",
                 vo["visuals_terrain_uv"]?.GetValue<string>() ?? "planar", vo["visuals_ground"]?.GetValue<string>() ?? "collision",
-                vo["visuals_ground_lod"]?.GetValue<bool>() ?? false, vo["visuals_ground_bake"]?.GetValue<string>());
+                vo["visuals_ground_lod"]?.GetValue<bool>() ?? false, vo["visuals_ground_bake"]?.GetValue<string>(),
+                vo["visuals_steep"]?.GetValue<bool>() ?? false, vo["visuals_ground_detail"]?.GetValue<bool>() ?? false);
             RoadProbe? probe = vo["objects"]?.GetValue<string>() is { } objCfg
                 ? NewProbe(ir, pl, objCfg) : null;
             failures += Visuals.Check(new LegacyPackage(HostPaths.Resolve(root, HostPaths.Cell)), ir, pl, Toml.Load(visualsCfg), opt, w,

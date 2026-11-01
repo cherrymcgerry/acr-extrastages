@@ -181,8 +181,12 @@ internal static class StageVerify
                     var mic = p.LoadPackage("acr/Content" + path["/Game".Length..] + ".uasset").GetExports()
                         .OfType<CUE4Parse.UE4.Assets.Exports.Material.UMaterialInstanceConstant>().Single();
                     var parent = mic.Parent?.Load<CUE4Parse.UE4.Assets.Exports.Material.UMaterialInterface>();
-                    if (parent?.Name != "M_Simple") { bad.Add($"{path}: parent {parent?.Name ?? "unresolved"}"); continue; }
-                    bool ok = mic.TextureParameterValues.Length == 3;
+                    // vegetation billboards (MI_bb_*): M_TreelineMaster child, base colour + normal, atlas tiling scalars at 1
+                    bool foliage = path[(path.LastIndexOf('/') + 1)..].StartsWith("MI_bb_");
+                    if (parent?.Name != (foliage ? "M_TreelineMaster" : "M_Simple")) { bad.Add($"{path}: parent {parent?.Name ?? "unresolved"}"); continue; }
+                    bool ok = mic.TextureParameterValues.Length == (foliage ? 2 : 3);
+                    if (foliage && mic.ScalarParameterValues.Where(sp => sp.ParameterInfo.Name.Text is "UsedTiles" or "VerticalTiles").Any(sp => sp.ParameterValue != 1))
+                    { bad.Add($"{path}: atlas tiling scalars not 1"); continue; }
                     foreach (var tp in mic.TextureParameterValues)
                     {
                         var tex = tp.ParameterValue.Load<CUE4Parse.UE4.Assets.Exports.Texture.UTexture2D>();

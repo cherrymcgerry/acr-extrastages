@@ -6,6 +6,9 @@ namespace AcrExtraStages;
 
 internal static class Program
 {
+    /// The usage text with this platform's executable name (AcrExtraStages on Linux).
+    static string UsageText => Usage.Replace("AcrExtraStages.exe", Layout.Exe("AcrExtraStages"));
+
     const string Usage = """
         AcrExtraStages.exe [command] [options]       no command: interactive menu
 
@@ -29,6 +32,12 @@ internal static class Program
           --no-verify             skip acr-additive verify      --roundtrip   also round-trip the registry tables
           --max-length-km <km>    defer stages longer than this (stage-fit; default 9)
           --keep-temp             keep per-stage scratch folders --copy     copy instead of hard-linking
+          --vegetation <mode>     none (default) or billboards: DR2's trees and bushes as billboards (experimental)
+          --native-foliage        DR2's trees, bushes and grasses as ACR's own foliage (experimental; implies --vegetation native)
+          --native-props          also DR2's fences, signs, gantries, cones and rocks as ACR props, roadside grass and
+                                  rock texture on steep banks (experimental; implies --native-foliage)
+          --acr-ground            ACR detail normal map on the DR2 ground colours (experimental)
+          --acr-road              ACR's layered gravel road material instead of DR2's road texture (experimental)
           --ignore-disk-space     warn instead of stopping when free space is below the estimate
           --root <dir>            folder with config\ and work\ (default: next to the exe / the repo root)
           --tools <dir>           folder with <tool>\<tool>.exe  --yes      accept defaults, never prompt
@@ -43,11 +52,11 @@ internal static class Program
         string? cmd = null;
         var named = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var flags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var valued = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "acr", "dr2", "usmap", "only", "dry-run-mods", "max-length-km", "root", "tools" };
+        var valued = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "acr", "dr2", "usmap", "only", "dry-run-mods", "max-length-km", "root", "tools", "vegetation" };
         for (int i = 0; i < argv.Length; i++)
         {
             var a = argv[i];
-            if (a is "-h" or "--help" or "/?") { Console.WriteLine(Usage); return 0; }
+            if (a is "-h" or "--help" or "/?") { Console.WriteLine(UsageText); return 0; }
             if (a.StartsWith("--") || a.StartsWith('-') && a.Length > 1 && !char.IsDigit(a[1]))
             {
                 var k = a.TrimStart('-');
@@ -59,7 +68,7 @@ internal static class Program
                 else flags.Add(k);
             }
             else if (cmd is null) cmd = a.ToLowerInvariant();
-            else { Console.Error.WriteLine($"unexpected argument {a}\n\n{Usage}"); return 2; }
+            else { Console.Error.WriteLine($"unexpected argument {a}\n\n{UsageText}"); return 2; }
         }
         var interactive = cmd is null;
         Ui.Yes = flags.Contains("yes");
@@ -83,6 +92,13 @@ internal static class Program
                 Force = flags.Contains("force"),
                 NoVerify = flags.Contains("no-verify"),
                 KeepTemp = flags.Contains("keep-temp"),
+                NativeFoliage = flags.Contains("native-foliage") || flags.Contains("native-props"),
+                NativeProps = flags.Contains("native-props"),
+                AcrGround = flags.Contains("acr-ground"),
+                AcrRoad = flags.Contains("acr-road"),
+                Vegetation = named.GetValueOrDefault("vegetation") is { } veg
+                    ? veg is "none" or "billboards" or "native" ? veg : throw new LauncherException($"--vegetation must be none, billboards or native, not {veg}")
+                    : flags.Contains("native-foliage") || flags.Contains("native-props") ? "native" : "none",
                 IgnoreDisk = flags.Contains("ignore-disk-space"),
                 Copy = flags.Contains("copy"),
                 MaxLengthKm = named.TryGetValue("max-length-km", out var mk) ? double.Parse(mk, CultureInfo.InvariantCulture) : null,
@@ -129,7 +145,7 @@ internal static class Program
 
     static int Bad(string cmd)
     {
-        Console.Error.WriteLine($"unknown command {cmd}\n\n{Usage}");
+        Console.Error.WriteLine($"unknown command {cmd}\n\n{UsageText}");
         return 2;
     }
 

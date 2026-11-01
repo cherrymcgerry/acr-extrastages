@@ -26,7 +26,8 @@ acr-mappings inspect  <file.usmap> [--struct <Name>...] [--enum <Name>...] [--fi
 acr-mappings diff     <a.usmap> <b.usmap> [--limit 40] [--strict]
 ```
 
-- `--game` defaults to `ACR_GAME_DIR`, else `C:\Program Files (x86)\Steam\steamapps\common\Assetto Corsa Rally`.
+- `--game` defaults to `ACR_GAME_DIR`, else `C:\Program Files (x86)\Steam\steamapps\common\Assetto Corsa Rally`
+  (Linux: `~/.local/share/Steam/steamapps/common/Assetto Corsa Rally`).
 - **dump:**
   - If ACR is already running, the tool attaches to it and leaves it running.
   - Otherwise it starts ACR with `steam://rungameid/3917090`. It waits until GObjects resolve, the key types (`Actor`,
@@ -115,6 +116,26 @@ Or put the same `[patch."https://github.com/cherrymcgerry/acr-rewind.git"]` entr
 - **CUE4Parse:** `validate` passes on the vanilla install. A copy with one wrong `DBTrackVariant` property type fails
   on `DT_TracksVariants`.
 
+## Linux (Proton)
+
+The same tool runs natively on Linux against the game running under Proton. Wine maps the game's PE images into an
+ordinary Linux process, so the Windows virtual addresses are that process's addresses and nothing else changes:
+
+- **Process:** the game is found by the basename of argv[0] (`acr.exe`; Wine passes the Windows path), read through
+  `/proc/<pid>/mem` opened **read-only**, the equivalent of `ReadProcessMemory`. Nothing is written, injected or
+  traced (no `PTRACE_ATTACH`); the kernel still applies the ptrace access check, so `kernel.yama.ptrace_scope` must be
+  0, or the binary needs `cap_sys_ptrace` (the error message says how; see `docs/linux.md`).
+- **Modules:** from `/proc/<pid>/maps`: Wine maps each image's headers from its file, so the lowest offset-0 mapping
+  of `<name>.exe` / `<name>.dll` that starts with `MZ` is its base.
+- **SRWLock functions** (the "dumper7" FNamePool scan): Wine's system DLLs are not at the same address in this native
+  process, so `InitializeSRWLock` / `RtlInitializeSRWLock` are resolved from the target's own export tables
+  (`process::pe_export`; kernel32 / kernelbase forwarders are skipped, ntdll's export is the call target).
+- **Start / close:** `steam steam://rungameid/3917090` (else `xdg-open`); `SIGTERM`, then `SIGKILL` after 60 s.
+
+Verified on ACR build 25170642 (2026-10-31, Bazzite, Proton 11.0-100): the dump matches the Windows result (same
+GObjects / FNamePool addresses, 14,866 structs, 2,623 enums, 51,698 properties) and `validate` passes. With the
+signatures' `gnames_rva` removed, the dumper7 scan finds the same FNamePool through the exported SRWLock function.
+
 ## Limitations
 
 - **Blueprint types depend on load state.** Blueprint classes and user structs are dumped only if they are loaded at
@@ -123,4 +144,5 @@ Or put the same `[patch."https://github.com/cherrymcgerry/acr-rewind.git"]` entr
 - **Fixed layout.** The FProperty sub-layout (`sizeof(FProperty)` 0x70, array inner at 0x78, `UEnum::Names` at 0x40)
   is fixed for UE 5.6 in `walk::PropLayout`, not read from `signatures.toml`. An engine upgrade would need these
   offsets checked (Dumper-7 CppSDK `Basic.hpp`).
-- **Windows only.** The game is started through Steam, so Steam must be able to launch it unattended.
+- **Windows and Linux (Proton) only.** The game is started through Steam, so Steam must be able to launch it
+  unattended.

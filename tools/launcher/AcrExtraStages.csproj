@@ -3,7 +3,6 @@
        Publish: see tools/launcher/README.md. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>AcrExtraStages</AssemblyName>
@@ -12,14 +11,26 @@
     <Product>ACR Extra Stages</Product>
     <InvariantGlobalization>true</InvariantGlobalization>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- win-x64 (the release) or linux-x64 (Steam + Proton), from the building OS unless -r is given. -->
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' and $([MSBuild]::IsOSPlatform('Linux'))">linux-x64</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
+    <TargetFramework Condition="$(RuntimeIdentifier.StartsWith('win'))">net10.0-windows</TargetFramework>
+    <TargetFramework Condition="!$(RuntimeIdentifier.StartsWith('win'))">net10.0</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <DebugType>embedded</DebugType>
   </PropertyGroup>
-  <ItemGroup>
+  <!-- Location logos: GDI+ on Windows (Logos.cs), SkiaSharp elsewhere (Logos.Skia.cs); each build has one of them. -->
+  <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('win'))">
+    <Compile Remove="Logos.Skia.cs" />
     <PackageReference Include="System.Drawing.Common" Version="10.0.0" />
+  </ItemGroup>
+  <ItemGroup Condition="!$(RuntimeIdentifier.StartsWith('win'))">
+    <Compile Remove="Logos.cs" />
+    <PackageReference Include="SkiaSharp" Version="3.119.1" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.119.1" />
   </ItemGroup>
 </Project>

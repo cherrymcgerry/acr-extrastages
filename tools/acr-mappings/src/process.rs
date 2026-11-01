@@ -143,7 +143,7 @@ mod imp {
 
     /// `InitializeSRWLock` / `RtlInitializeSRWLock` addresses (the FNamePool "dumper7" scan looks
     /// for calls to them). System DLLs share their base across processes within a boot session.
-    pub fn srwlock_fns() -> Vec<usize> {
+    pub fn srwlock_fns(_mem: &dyn Memory, _modules: &[ModuleEntry]) -> Vec<usize> {
         use windows::core::{s, w};
         use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
         let mut out = Vec::new();
@@ -165,7 +165,140 @@ mod imp {
     }
 }
 
-#[cfg(not(windows))]
+/// Linux: the game runs under Wine/Proton, a normal process of the same user. Its Windows virtual addresses are
+/// the process's own addresses, so `/proc/<pid>/mem` is the ReadProcessMemory equivalent (opened read-only; needs
+/// ptrace access, which `kernel.yama.ptrace_scope` 0 gives same-user processes). Modules come from `/proc/<pid>/maps`:
+/// Wine maps each PE image's headers from its file, so the lowest offset-0 mapping of `<name>.exe/.dll` is its base.
+#[cfg(target_os = "linux")]
+mod imp {
+    use super::*;
+    use std::fs::File;
+    use std::os::unix::fs::FileExt;
+
+    /// The executable a process runs: basename of argv[0] (Wine sets it to the Windows path), else `comm`.
+    fn process_name(pid: u32) -> Option<String> {
+        if let Ok(cmd) = std::fs::read(format!("/proc/{pid}/cmdline")) {
+            let argv0 = String::from_utf8_lossy(cmd.split(|&b| b == 0).next().unwrap_or_default()).into_owned();
+            let base = argv0.rsplit(['\\', '/']).next().unwrap_or_default().to_string();
+            if !base.is_empty() {
+                return Some(base);
+            }
+        }
+        std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().map(|s| s.trim_end().to_string())
+    }
+
+    pub fn list_processes() -> Result<Vec<ProcessEntry>> {
+        let mut out = Vec::new();
+        for e in std::fs::read_dir("/proc")? {
+            let Ok(e) = e else { continue };
+            let Some(pid) = e.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else { continue };
+            if let Some(name) = process_name(pid) {
+                out.push(ProcessEntry { pid, name });
+            }
+        }
+        Ok(out)
+    }
+
+    pub struct RemoteProcess {
+        mem: File,
+        pub pid: u32,
+    }
+
+    impl RemoteProcess {
+        pub fn open(pid: u32) -> Result<Self> {
+            let mem = File::open(format!("/proc/{pid}/mem")).map_err(|e| {
+                let scope = std::fs::read_to_string("/proc/sys/kernel/yama/ptrace_scope").unwrap_or_default();
+                let hint = if e.kind() == std::io::ErrorKind::PermissionDenied && scope.trim() != "0" {
+                    format!(
+                        "; kernel.yama.ptrace_scope is {} (only parents may read a process). Either give this tool the \
+                         right once: `sudo setcap cap_sys_ptrace=ep {}`, or allow it until the next reboot: \
+                         `sudo sysctl kernel.yama.ptrace_scope=0`",
+                        scope.trim(),
+                        std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|_| "acr-mappings".into())
+                    )
+                } else {
+                    String::new()
+                };
+                anyhow::anyhow!("opening /proc/{pid}/mem read-only: {e}{hint}")
+            })?;
+            Ok(Self { mem, pid })
+        }
+
+        pub fn is_alive(&self) -> bool {
+            // state is the field after "(comm)"; a zombie has exited
+            match std::fs::read_to_string(format!("/proc/{}/stat", self.pid)) {
+                Ok(s) => s.rsplit_once(')').map(|(_, r)| !r.trim_start().starts_with('Z')).unwrap_or(false),
+                Err(_) => false,
+            }
+        }
+
+        pub fn modules(&self) -> Result<Vec<ModuleEntry>> {
+            let maps = std::fs::read_to_string(format!("/proc/{}/maps", self.pid))?;
+            let mut base: HashMap<String, usize> = HashMap::new();
+            for line in maps.lines() {
+                // start-end perms offset dev inode path
+                let mut f = line.splitn(6, char::is_whitespace);
+                let (Some(range), Some(_perms), Some(offset), Some(_dev), Some(_inode)) =
+                    (f.next(), f.next(), f.next(), f.next(), f.next())
+                else {
+                    continue;
+                };
+                let path = f.next().unwrap_or("").trim();
+                let name = path.rsplit('/').next().unwrap_or("");
+                let lower = name.to_ascii_lowercase();
+                if !(lower.ends_with(".exe") || lower.ends_with(".dll")) || !offset.trim_start_matches('0').is_empty() {
+                    continue;
+                }
+                let Some(start) = range.split('-').next().and_then(|a| usize::from_str_radix(a, 16).ok()) else {
+                    continue;
+                };
+                let mut mz = [0u8; 2];
+                if !self.read(start, &mut mz) || &mz != b"MZ" {
+                    continue;
+                }
+                let b = base.entry(name.to_string()).or_insert(start);
+                *b = (*b).min(start);
+            }
+            if base.is_empty() {
+                bail!("no PE modules mapped in pid {} (not a Wine process?)", self.pid)
+            }
+            let mut out: Vec<_> = base.into_iter().map(|(name, base)| ModuleEntry { name, base }).collect();
+            out.sort_by_key(|m| m.base);
+            Ok(out)
+        }
+
+        pub fn read(&self, addr: usize, buf: &mut [u8]) -> bool {
+            if buf.is_empty() {
+                return true;
+            }
+            if addr.checked_add(buf.len()).is_none() || addr > i64::MAX as usize {
+                return false;
+            }
+            self.mem.read_exact_at(buf, addr as u64).is_ok()
+        }
+    }
+
+    /// `InitializeSRWLock` / `RtlInitializeSRWLock` in the game process. Wine's system DLLs are not mapped at
+    /// the same addresses in this (native) process, so they come from the target's own export tables. Wine's
+    /// kernel32 / kernelbase entries are usually forwarders to ntdll and are skipped; ntdll's is the call target.
+    pub fn srwlock_fns(mem: &dyn Memory, modules: &[ModuleEntry]) -> Vec<usize> {
+        let mut out = Vec::new();
+        for (module, func) in [
+            ("kernel32.dll", "InitializeSRWLock"),
+            ("kernelbase.dll", "InitializeSRWLock"),
+            ("ntdll.dll", "RtlInitializeSRWLock"),
+        ] {
+            if let Some(m) = modules.iter().find(|m| m.name.eq_ignore_ascii_case(module)) {
+                if let Some(addr) = super::pe_export(mem, m.base, func) {
+                    out.push(addr);
+                }
+            }
+        }
+        out
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 mod imp {
     use super::*;
     pub struct RemoteProcess {
@@ -173,27 +306,63 @@ mod imp {
     }
     impl RemoteProcess {
         pub fn open(_pid: u32) -> Result<Self> {
-            bail!("acr-mappings only supports Windows")
+            bail!("acr-mappings only supports Windows and Linux (Proton)")
         }
         pub fn is_alive(&self) -> bool {
             false
         }
         pub fn modules(&self) -> Result<Vec<ModuleEntry>> {
-            bail!("acr-mappings only supports Windows")
+            bail!("acr-mappings only supports Windows and Linux (Proton)")
         }
         pub fn read(&self, _addr: usize, _buf: &mut [u8]) -> bool {
             false
         }
     }
     pub fn list_processes() -> Result<Vec<ProcessEntry>> {
-        bail!("acr-mappings only supports Windows")
+        bail!("acr-mappings only supports Windows and Linux (Proton)")
     }
-    pub fn srwlock_fns() -> Vec<usize> {
+    pub fn srwlock_fns(_mem: &dyn Memory, _modules: &[ModuleEntry]) -> Vec<usize> {
         Vec::new()
     }
 }
 
 pub use imp::{list_processes, srwlock_fns, RemoteProcess};
+
+/// Address of the export `name` of the PE64 image at `base`, read through `mem`; `None` when it is missing or a
+/// forwarder (its RVA points into the export directory).
+#[cfg_attr(windows, allow(dead_code))]
+pub fn pe_export(mem: &dyn Memory, base: usize, name: &str) -> Option<usize> {
+    let u32_at = |a: usize| mem.read_u32(a);
+    let u16_at = |a: usize| {
+        let mut b = [0u8; 2];
+        mem.read(a, &mut b).then(|| u16::from_le_bytes(b))
+    };
+    if u16_at(base)? != 0x5A4D {
+        return None; // MZ
+    }
+    let nt = base + u32_at(base + 0x3C)? as usize;
+    if u32_at(nt)? != 0x4550 || u16_at(nt + 0x18)? != 0x20B {
+        return None; // "PE\0\0", PE32+ optional header
+    }
+    let (dir_rva, dir_size) = (u32_at(nt + 0x18 + 0x70)? as usize, u32_at(nt + 0x18 + 0x74)? as usize);
+    if dir_rva == 0 {
+        return None;
+    }
+    let dir = base + dir_rva;
+    let count = u32_at(dir + 0x18)? as usize;
+    let (funcs, names, ords) =
+        (base + u32_at(dir + 0x1C)? as usize, base + u32_at(dir + 0x20)? as usize, base + u32_at(dir + 0x24)? as usize);
+    let mut buf = vec![0u8; name.len() + 1];
+    for i in 0..count.min(0x10000) {
+        let at = base + u32_at(names + 4 * i)? as usize;
+        if !mem.read(at, &mut buf) || &buf[..name.len()] != name.as_bytes() || buf[name.len()] != 0 {
+            continue;
+        }
+        let rva = u32_at(funcs + 4 * u16_at(ords + 2 * i)? as usize)? as usize;
+        return (rva != 0 && !(dir_rva..dir_rva + dir_size).contains(&rva)).then_some(base + rva);
+    }
+    None
+}
 
 /// Pids of processes named `name` (case-insensitive).
 pub fn find_pids(name: &str) -> Result<Vec<u32>> {
@@ -319,5 +488,88 @@ mod tests {
         let name = exe.file_name().unwrap().to_string_lossy().into_owned();
         assert!(find_pids(&name).unwrap().contains(&std::process::id()));
         assert!(me.modules().unwrap().iter().any(|m| m.name.eq_ignore_ascii_case("kernel32.dll")));
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use super::*;
+
+    #[test]
+    fn reads_own_process_and_never_writes() {
+        let me = RemoteProcess::open(std::process::id()).unwrap();
+        assert!(me.is_alive());
+        let value: u64 = 0xA5A5_1234_5678_9ABC;
+        let addr = &value as *const u64 as usize;
+        let pc = PageCache::new(&me, 64);
+        assert_eq!(pc.read_u64(addr), Some(value));
+        assert!(!pc.write_u32(addr, 1));
+        assert_eq!(value, 0xA5A5_1234_5678_9ABC);
+        assert!(!me.read(0x10, &mut [0u8; 8]), "unmapped page reads fail instead of panicking");
+    }
+
+    #[test]
+    fn lists_own_process_by_argv0_basename() {
+        let exe = std::env::args().next().unwrap();
+        let name = exe.rsplit('/').next().unwrap().to_string();
+        assert!(find_pids(&name).unwrap().contains(&std::process::id()));
+    }
+
+    #[test]
+    fn exited_process_is_not_alive() {
+        let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let p = RemoteProcess::open(child.id()).unwrap();
+        assert!(p.is_alive());
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(!p.is_alive());
+    }
+
+    /// A minimal PE32+ image with an export directory: one function and one forwarder.
+    struct Image(Vec<u8>, usize);
+    impl Memory for Image {
+        fn read(&self, addr: usize, buf: &mut [u8]) -> bool {
+            let Some(off) = addr.checked_sub(self.1) else { return false };
+            match self.0.get(off..off + buf.len()) {
+                Some(s) => {
+                    buf.copy_from_slice(s);
+                    true
+                }
+                None => false,
+            }
+        }
+        fn write(&self, _addr: usize, _data: &[u8]) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn resolves_exports_and_skips_forwarders() {
+        let base = 0x7FF0_0000_0000usize;
+        let mut img = vec![0u8; 0x2000];
+        let put32 = |img: &mut Vec<u8>, at: usize, v: u32| img[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        img[0..2].copy_from_slice(b"MZ");
+        put32(&mut img, 0x3C, 0x80);
+        img[0x80..0x84].copy_from_slice(b"PE\0\0");
+        img[0x98..0x9A].copy_from_slice(&0x20Bu16.to_le_bytes());
+        let (dir, size) = (0x1000usize, 0x200u32);
+        put32(&mut img, 0x98 + 0x70, dir as u32);
+        put32(&mut img, 0x98 + 0x74, size);
+        put32(&mut img, dir + 0x18, 2); // NumberOfNames
+        put32(&mut img, dir + 0x1C, 0x1100); // AddressOfFunctions
+        put32(&mut img, dir + 0x20, 0x1110); // AddressOfNames
+        put32(&mut img, dir + 0x24, 0x1120); // AddressOfNameOrdinals
+        put32(&mut img, 0x1100, 0x1800); // function 0: code
+        put32(&mut img, 0x1104, 0x1180); // function 1: forwarder string inside the directory
+        put32(&mut img, 0x1110, 0x1140);
+        put32(&mut img, 0x1114, 0x1160);
+        img[0x1122..0x1124].copy_from_slice(&1u16.to_le_bytes());
+        img[0x1140..0x1140 + 21].copy_from_slice(b"RtlInitializeSRWLock\0");
+        img[0x1160..0x1160 + 18].copy_from_slice(b"InitializeSRWLock\0");
+        let mem = Image(img, base);
+        assert_eq!(pe_export(&mem, base, "RtlInitializeSRWLock"), Some(base + 0x1800));
+        assert_eq!(pe_export(&mem, base, "InitializeSRWLock"), None, "forwarder");
+        assert_eq!(pe_export(&mem, base, "RtlInitializeSRWLoc"), None, "prefix only");
+        assert_eq!(pe_export(&mem, base + 0x10, "RtlInitializeSRWLock"), None, "not a PE");
     }
 }

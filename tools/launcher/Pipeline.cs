@@ -182,7 +182,7 @@ internal sealed class Pipeline
                 row.input_hash = Files.HashText(string.Join("|",
                     "spec=" + Files.ContentHash(specs[p.Id].File), "ir=" + Files.FileSig(Path.Combine(ir, "stage.json")),
                     "terrain=" + Files.FileSig(Path.Combine(ir, "render", "terrain.glb")), "bake=" + Files.FileSig(bake),
-                    $"cfg={configSig}", $"tools={toolSig}", $"script={PipelineVersion}", $"vanilla={vanillaSig}"));
+                    $"cfg={configSig}", $"tools={toolSig}", $"script={PipelineVersion}", $"vanilla={vanillaSig}", $"vegetation={_c.Vegetation}", $"native-foliage={_c.NativeFoliage}", $"native-props={_c.NativeProps}", $"acr-ground={_c.AcrGround}", $"acr-road={_c.AcrRoad}"));
                 row.status = "todo";
             }
             rows.Add(row);
@@ -245,7 +245,7 @@ internal sealed class Pipeline
                     .Select(x => x.Trim()).Distinct().ToList();
                 var msg = $"{error ?? "no container written"}; {string.Join(" | ", why)}";
                 r.reason = msg[..Math.Min(500, msg.Length)];
-                var miss = lines.FirstOrDefault(x => Regex.IsMatch(x, @"Could not find file '.*\\work\\ir\\"));
+                var miss = lines.FirstOrDefault(x => Regex.IsMatch(x, @"Could not find file '.*[\\/]work[\\/]ir[\\/]"));
                 if (miss is not null)
                 {
                     // prepared data is incomplete (a texture the render materials reference was never extracted)
@@ -338,7 +338,7 @@ internal sealed class Pipeline
             foreach (var p in s.ClonePackages) filters.Add(p.Key["/Game/".Length..]);
         var need = filters.Distinct().Where(f =>
         {
-            var rel = Path.Combine(legacy, "acr", "Content", f.Replace('/', '\\').TrimEnd('\\'));
+            var rel = Path.Combine(legacy, "acr", "Content", f.Replace('/', Path.DirectorySeparatorChar).TrimEnd(Path.DirectorySeparatorChar));
             var hasDir = Directory.Exists(rel) && Directory.EnumerateFiles(rel, "*", SearchOption.AllDirectories)
                 .Any(x => x.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase) || x.EndsWith(".umap", StringComparison.OrdinalIgnoreCase));
             return !hasDir && !File.Exists(rel + ".umap") && !File.Exists(rel + ".uasset");
@@ -363,15 +363,17 @@ internal sealed class Pipeline
         Vanilla.InvalidateIfStale(legacy, paks);
         var host = new (string Rel, string? Filter)[]
         {
-            (@"acr\Content\Environments\WalesS4HafrenSouth\DataAssets\DA_WalesS4HafrenSouthBakedData", null),
-            (@"acr\Content\Levels\WalesS4HafrenSouth\_Generated_\22VG0QIP9ATUQI633K86KWPFP", null),
-            (@"acr\Content\Data\Database\Main\TrackSelection\DT_TracksVariants", null),
-            (@"acr\Content\Data\Pacenote\Tables\DT_PacenoteHafrenSouthForward", null),
-            (@"acr\Content\Levels\WalesS4HafrenSouth", "WalesS4HafrenSouth.umap"),   // the bare name would match all of its cells
-            (@"acr\Content\Data\Localization\ContentTexts\ST_Track", null),
-            (@"acr\Content\Materials\PhotoMode\Textures\T_Dirt", null),
-            (@"acr\Content\Effects\Vehicles\Skid\T_SkidDebug_N", null),
-            (@"acr\Content\Environments\MonteCarloS2Sisteron\TileableMaterials\MI_SisteronConcrete01", null),
+            (@"acr/Content/Environments/WalesS4HafrenSouth/DataAssets/DA_WalesS4HafrenSouthBakedData", null),
+            (@"acr/Content/Levels/WalesS4HafrenSouth/_Generated_/22VG0QIP9ATUQI633K86KWPFP", null),
+            (@"acr/Content/Data/Database/Main/TrackSelection/DT_TracksVariants", null),
+            (@"acr/Content/Data/Pacenote/Tables/DT_PacenoteHafrenSouthForward", null),
+            (@"acr/Content/Levels/WalesS4HafrenSouth", "WalesS4HafrenSouth.umap"),   // the bare name would match all of its cells
+            (@"acr/Content/Data/Localization/ContentTexts/ST_Track", null),
+            (@"acr/Content/Materials/PhotoMode/Textures/T_Dirt", null),
+            (@"acr/Content/Effects/Vehicles/Skid/T_SkidDebug_N", null),
+            (@"acr/Content/Environments/MonteCarloS2Sisteron/TileableMaterials/MI_SisteronConcrete01", null),
+            (@"acr/Content/Environments/RallyShared/MaterialInstances/M_Treeline_Wales", null),   // vegetation billboards (foliage_mic_template)
+            (@"acr/Content/Props/MonteCarloProps/MOnBolStoneWallB/MI_MonBolStoneWallB", null),    // ground detail (detail_mic_template)
         };
         foreach (var (rel, filter) in host)
         {
@@ -413,7 +415,11 @@ internal sealed class Pipeline
             "--respawn", "relay",
             "--scenery", cfg("scenery.toml"), "--scenery-actor-hidden", "1",
             "--visuals", cfg("visuals.toml"), "--visuals-host", "start", "--visuals-retarget", "1",
-            "--visuals-vegetation", "none", "--visuals-vista", "1", "--visuals-textured", "1",
+            "--native-foliage", _c.NativeFoliage ? "1" : "0", "--native-props", _c.NativeProps ? "1" : "0",
+            "--visuals-steep", _c.NativeProps ? "1" : "0",
+            "--visuals-ground-detail", _c.AcrGround ? "1" : "0",
+            "--visuals-dr2-revert", _c.AcrRoad ? "road" : "",
+            "--visuals-vegetation", _c.Vegetation, "--visuals-vista", "1", "--visuals-textured", "1",
             "--visuals-dr2", "1", "--visuals-canopies", "apex", "--visuals-terrain-uv", "box",
             "--visuals-ground", "render", "--visuals-ground-lod", "1",
             "--sky", cfg("sky.toml"), "--sky-section", s.Sky,
@@ -472,7 +478,7 @@ internal sealed class Pipeline
         Directory.CreateDirectory(outDir);
         foreach (var rel in new[]
                  {
-                     @"acr\Content\Levels\WalesS4HafrenSouth", @"acr\Content\Environments\WalesS4HafrenSouth\DataAssets", @"acr\Content\Data\Pacenote\Tables",
+                     @"acr/Content/Levels/WalesS4HafrenSouth", @"acr/Content/Environments/WalesS4HafrenSouth/DataAssets", @"acr/Content/Data/Pacenote/Tables",
                  })
         {
             var s = Path.Combine(legacy, rel);

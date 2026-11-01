@@ -15,9 +15,12 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
 
 jobs:
-  release:
-    name: Build and publish
-    runs-on: windows-latest
+  build:
+    name: Build (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
 
@@ -27,7 +30,6 @@ jobs:
           $version = (Get-Content VERSION -Raw).Trim()
           if ("v$version" -ne $env:GITHUB_REF_NAME) { throw "tag $env:GITHUB_REF_NAME does not match VERSION $version" }
           if ((Get-Content CHANGELOG.md -Raw) -notmatch "(?m)^## \[$([regex]::Escape($version))\]") { throw "CHANGELOG.md has no '## [$version]' section" }
-          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - uses: actions/setup-dotnet@v5
         with:
@@ -53,10 +55,33 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'cargo test (stage-validate) failed' }
 
       # Publishes the launcher and the .NET tools (self-contained, single file), builds acr-mappings and retoc (pinned
-      # commit), then zips dist/ACR-Extra-Stages-<version>.zip and dist/SHA256SUMS.txt.
+      # commit), then writes the archive and its checksum file into dist/:
+      #   Windows: ACR-Extra-Stages-<version>.zip + SHA256SUMS.txt
+      #   Linux:   ACR-Extra-Stages-<version>-linux-x64.tar.gz + SHA256SUMS-linux-x64.txt
       - name: Package
         shell: pwsh
         run: ./scripts/package.ps1
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: dist-${{ runner.os }}
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release (draft)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read VERSION
+        run: echo "VERSION=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Publish GitHub Release (draft)
         uses: softprops/action-gh-release@v3
@@ -69,3 +94,5 @@ jobs:
           files: |
             dist/ACR-Extra-Stages-${{ env.VERSION }}.zip
             dist/SHA256SUMS.txt
+            dist/ACR-Extra-Stages-${{ env.VERSION }}-linux-x64.tar.gz
+            dist/SHA256SUMS-linux-x64.txt

@@ -6,14 +6,17 @@ namespace AcrRef;
 /// Road-following UVs for the visuals road section ([textured] in config/visuals.toml), in the layout of Hafren's own
 /// road meshes (SM_WalesS4HafrenSouthTrack*_Road_*, read with `acr-ref mesh-uv`):
 ///   UV0 tiling: U = across / road_uv0_across_m, V = along / road_uv0_along_m
-///   UV1: U 0..1 from one road edge to the other (DR2 gate width), V = along / road_uv1_along_m
+///   UV1: U 0..1 from one road edge to the other (the drawn edges when RoadEdge cut them, else the DR2 gate width),
+///     V = along / road_uv1_along_m. Hafren's layered road material blends to its edge look where U is more than
+///     RoadHeightBlend_CenterDistance (0.23) from 0.5, so U must reach the drawn edges.
 ///   UV2 / UV3: the trajectory coordinate, U = 0.5 -/+ across / road_traj_across_m, V = along / road_traj_along_m
-///     (Hafren carries the mirrored one in UV4; a ProceduralMeshComponent has UV0..UV3 only)
+///     (Hafren carries the mirrored one in UV4; a ProceduralMeshComponent has UV0..UV3 only); with road_uv3_world_m,
+///     UV3 is a plan mapping like Hafren's own UV3 instead
 /// "along" is metres along the DR2 centreline, "across" the signed plan offset from it. Each vertex is projected onto
 /// the centreline segments near its first triangle, so the two legs of a hairpin do not mix.
 internal static class RoadUv
 {
-    public static JsonObject Apply(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ProcMesh.Section road)
+    public static JsonObject Apply(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ProcMesh.Section road, Func<int, double, double>? halfWidth = null)
     {
         double a0 = cfg.Num("textured", "road_uv0_across_m") * 100, l0 = cfg.Num("textured", "road_uv0_along_m") * 100;
         double l1 = cfg.Num("textured", "road_uv1_along_m") * 100;
@@ -44,6 +47,19 @@ internal static class RoadUv
         }
 
         int nv = road.Pos.Count;
+        road.Color = Bgra(cfg, "road_color");
+        double blend = halfWidth is not null && cfg["textured"].TryGetValue("road_edge_blend_m", out var bm) && bm is double bmd ? bmd * 100 : 0;
+        var edgeGreen = blend > 0 ? cfg.Arr("textured", "road_edge_green").Select(x => Convert.ToInt32(x)).ToArray() : [0, 0];
+        int baseG = (int)(road.Color >> 8 & 0xFF);
+        road.Colors.Clear();
+        if (blend > 0) for (int i = 0; i < nv; i++) road.Colors.Add(road.Color);
+        // [textured] road_uv3_world_m: UV3 as Hafren's (a plan mapping, metres per unit U, V) instead of the mirrored
+        // trajectory coordinate
+        var world3 = cfg["textured"].TryGetValue("road_uv3_world_m", out var w3) && w3 is object[] w3a && w3a.Length == 2
+            ? w3a.Select(x => Convert.ToDouble(x) * 100).ToArray() : null;
+        Vector2 Uv3(Vector3 p, double across, double along) => world3 is null
+            ? new Vector2((float)(0.5 + across / ta), (float)(along / tl))
+            : new Vector2((float)(p.X / world3[0]), (float)(p.Y / world3[1]));
         var done = new bool[nv];
         var off = new double[nv];
         road.Uv1.Clear(); road.Uv2.Clear(); road.Uv3.Clear();
@@ -68,9 +84,20 @@ internal static class RoadUv
                 far = Math.Max(far, dist);
                 off[v] = dist;
                 road.Uv[v] = new Vector2((float)(across / a0), (float)(along / l0));
-                road.Uv1[v] = new Vector2((float)Math.Clamp(0.5 + across / w, 0, 1), (float)(along / l1));
+                double u1 = halfWidth is null ? 0.5 + across / w : 0.5 + 0.5 * across / Math.Max(1, halfWidth(across > 0 ? 0 : 1, along));
+                road.Uv1[v] = new Vector2((float)Math.Clamp(u1, 0, 1), (float)(along / l1));
+                if (halfWidth is not null && blend > 0)
+                {
+                    // [textured] road_edge_blend_m: vertex green ramps from road_color's to road_edge_green over the last
+                    // metres before the drawn edge (the layered material shifts its layer heights by vertex green)
+                    double toEdge = halfWidth(across > 0 ? 0 : 1, along) - Math.Abs(across);
+                    double ramp = Math.Clamp(1 - toEdge / blend, 0, 1);
+                    int green = edgeGreen[across > 0 ? 0 : 1];
+                    int vg = (int)Math.Round(baseG + (green - baseG) * ramp * ramp * (3 - 2 * ramp));
+                    road.Colors[v] = road.Color & 0xFFFF00FFu | (uint)vg << 8;
+                }
                 road.Uv2[v] = new Vector2((float)(0.5 - across / ta), (float)(along / tl));
-                road.Uv3[v] = new Vector2((float)(0.5 + across / ta), (float)(along / tl));
+                road.Uv3[v] = Uv3(road.Pos[v], across, along);
             }
         }
         // other DR2 roads (junctions, driveways) carry the same surface codes; a triangle with a vertex further than
@@ -88,13 +115,13 @@ internal static class RoadUv
                 var q = road.Pos[v];
                 road.Idx[t + k] = (uint)road.Pos.Count;
                 road.Pos.Add(q); road.Nrm.Add(road.Nrm[v]); if (tan) road.Tan.Add(road.Tan[v]);
+                if (road.Colors.Count > 0) road.Colors.Add(road.Colors[v]);
                 road.Uv.Add(new Vector2((float)(q.X / a0), (float)(q.Y / l0)));
                 road.Uv1.Add(new Vector2(0.5f, (float)(q.Y / l1)));
                 road.Uv2.Add(new Vector2(0.5f, (float)(q.Y / tl)));
-                road.Uv3.Add(new Vector2(0.5f, (float)(q.Y / tl)));
+                road.Uv3.Add(world3 is null ? new Vector2(0.5f, (float)(q.Y / tl)) : Uv3(q, 0, 0));
             }
         }
-        road.Color = Bgra(cfg, "road_color");
         var (inside, mu, mv) = Stretch(road, a0 / 100, l0 / 100);
         var r = new JsonObject
         {
@@ -104,6 +131,8 @@ internal static class RoadUv
             ["uv0_median_m_per_unit"] = $"{mu:0.###} across, {mv:0.###} along",
             ["uv0_within_tolerance"] = Math.Round(inside, 4),
             ["road_color_bgra"] = $"{road.Color:X8}",
+            ["edge_blend"] = blend > 0 ? $"vertex green {baseG} -> {string.Join("/", edgeGreen)} (across > 0 / < 0) over the last {blend / 100} m" : "none",
+            ["uv1_across"] = halfWidth is null ? "DR2 gate width" : "drawn road edges (RoadEdge)",
         };
         Console.WriteLine($"visuals: road UVs along the DR2 centreline, {nv} vertices (up to {far / 100:0.0} m off it; {planar} triangles beyond " +
                           $"{maxOff / 100:0} m world-planar); UV0 median {mu:0.##} m across, {mv:0.##} m along per unit; " +

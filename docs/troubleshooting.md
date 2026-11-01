@@ -1,7 +1,9 @@
 # Troubleshooting
 
 For `AcrExtraStages.exe` (the launcher). The basics are in the [README](../README.md); this page
-covers what usually goes wrong and how to get unstuck.
+covers what usually goes wrong and how to get unstuck. On Linux the launcher is `AcrExtraStages`
+and paths use `/`; Linux-only issues (ptrace, filesystems, Steam variants) are in
+[linux.md](linux.md).
 
 **Safe to retry.** You can stop the launcher at any time, or run it again after an error. It skips
 data that is already prepared and containers whose inputs have not changed, so a re-run continues
@@ -87,6 +89,8 @@ Common failures:
   update in progress. Let Steam finish updating, then retry with `mappings --dump` (it asks before
   starting ACR; `--force` is in the `acr-mappings` tool, see
   [tools/acr-mappings/README.md](../tools/acr-mappings/README.md)).
+- **Linux: "Permission denied" on `/proc/<pid>/mem`.** The kernel's ptrace policy blocks reading
+  the game; see [linux.md](linux.md#the-mappings-step-and-ptrace) for the one-time fix.
 - **Close ACR yourself if the tool could not.** If ACR is already running, the tool attaches to
   it and leaves it running. Otherwise it closes the game after the dump (a forced kill after 60 s).
 - **Fallback: supply your own file.** Generate a `.usmap` with
@@ -135,6 +139,8 @@ work inside one NTFS volume.
   space)`). Copies need the extra ~20 GB. `--copy` forces copying.
 - Junctions or symlinks that move the game to another disk count as the other volume. Use the real
   path of the game folder.
+- Linux: the same rule applies per filesystem (one mount, and on btrfs one subvolume); see
+  [linux.md](linux.md#same-filesystem-hard-links).
 
 ## Oodle download fails
 
@@ -149,7 +155,9 @@ failing to fetch `oo2core_9_win64.dll`, usually at the first build step or at va
   tools from connecting to GitHub (the library comes from
   [WorkingRobot/OodleUE](https://github.com/WorkingRobot/OodleUE)).
 - The libraries are saved **next to each tool**: `oo2core_9_win64.dll` next to `retoc.exe`, and
-  `oodle-data-shared.dll` next to `acr-ref.exe` and `acr-additive.exe`. A partial or empty download
+  `oodle-data-shared.dll` next to `acr-ref.exe` and `acr-additive.exe` (on Linux:
+  `liboo2corelinux64.so.9` next to `retoc`, and a Linux build of the library under the same
+  `oodle-data-shared.dll` name next to `acr-ref` and `acr-additive`). A partial or empty download
   of one of them can cause repeated failures: delete the file and retry.
 - Offline or blocked: put your own copy of the library next to each tool, under the file name above.
   The tools use it instead of downloading. Do not share or commit it; it is Oodle's software.

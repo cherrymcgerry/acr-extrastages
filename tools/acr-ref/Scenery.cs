@@ -20,7 +20,7 @@ namespace AcrRef;
 internal static class Scenery
 {
     public const string PersistentLevel = "acr/Content/Levels/WalesS4HafrenSouth.umap";
-    public const string Persistent = @"acr\Content\Levels\WalesS4HafrenSouth";
+    public const string Persistent = @"acr/Content/Levels/WalesS4HafrenSouth";
     const string CellClass = "WorldPartitionRuntimeLevelStreamingCell";
     // WorldPartitionRuntimeLevelStreamingCell slots (acr-ref schema): 0 LevelStreaming, 1 bIsAlwaysLoaded,
     // 2 bIsSpatiallyLoaded, 3 DataLayers, 4 bClientOnlyVisible, 5 bIsHLOD, 6 bBlockOnSlowLoading, 7 ContentBundleID,
@@ -183,7 +183,7 @@ internal static class Scenery
         cfg.Arr("persistent", "hide_actor_classes").Cast<string>().ToHashSet(),
         cfg.Arr("persistent", "hide_meshes").Cast<string>().Select(x => new Regex(x)).ToArray());
 
-    public static JsonObject Build(string legacy, string outRoot, Toml cfg, string usmap, bool actorHidden = false)
+    public static JsonObject Build(string legacy, string outRoot, Toml cfg, string usmap, bool actorHidden = false, ISet<string>? keepVisible = null)
     {
         var path = HostPaths.Resolve(legacy, Persistent);
         var raw = (File.ReadAllBytes(path), File.ReadAllBytes(Path.ChangeExtension(path, ".uexp")));
@@ -229,8 +229,12 @@ internal static class Scenery
         int actorsHidden = 0, compsHidden = 0, already = 0, actorFlag = 0;
         var actorFlagSkipped = new SortedDictionary<string, int>();
         var actorNames = new JsonArray();
+        int keptVisible = 0;
+        var keptNames = new JsonArray();
         foreach (var (actor, rule, comps) in HiddenActors(pkg, plan))
         {
+            // native_trees: the stamp actor whose instances are moved onto the stage stays visible
+            if (keepVisible?.Contains(pkg.ExportName(actor)) == true) { keptVisible++; keptNames.Add(pkg.ExportName(actor)); continue; }
             actorsHidden++;
             actorNames.Add(pkg.ExportName(actor));
             byRule[rule] = byRule.GetValueOrDefault(rule) + 1;
@@ -264,7 +268,8 @@ internal static class Scenery
         }
         report["persistent"] = new JsonObject
         {
-            ["actors_hidden"] = actorsHidden, ["components_hidden"] = compsHidden, ["already_hidden"] = already,
+            ["actors_hidden"] = actorsHidden, ["components_hidden"] = compsHidden, ["already_hidden"] = already, ["kept_visible"] = keptVisible,
+            ["kept_visible_actors"] = keptNames,
             ["by_rule"] = new JsonObject(byRule.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)kv.Value))),
             ["component_classes"] = new JsonObject(compClasses.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)kv.Value))),
             ["explicitly_visible_left"] = new JsonObject(skipped.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)kv.Value))),
@@ -457,8 +462,10 @@ internal static class Scenery
         var mappings = new FileUsmapTypeMappingsProvider(usmap, StringComparer.OrdinalIgnoreCase).MappingsForGame!;
         int actors = 0, comps = 0, hidden = 0;
         var found = new HashSet<string>();
+        var keptVisible = (report?["persistent"]?["kept_visible_actors"] as JsonArray)?.Select(x => x!.GetValue<string>()).ToHashSet() ?? [];
         foreach (var (a, _, cs) in HiddenActors(pkg, plan, expected))
         {
+            if (keptVisible.Contains(pkg.ExportName(a))) continue;   // native_trees: deliberately visible
             actors++;
             found.Add(pkg.ExportName(a));
             foreach (var c in cs)
@@ -475,7 +482,7 @@ internal static class Scenery
             // the HLOD runtime switches its actors' components with SceneComponent::SetVisibility, overriding bVisible;
             // AActor.bHidden is not touched by it and hides every component in game
             int set = 0, hlods = 0, hlodSet = 0;
-            foreach (var (a, _, _) in HiddenActors(pkg, plan, expected))
+            foreach (var (a, _, _) in HiddenActors(pkg, plan, expected).Where(x => !keptVisible.Contains(pkg.ExportName(x.actor))))
             {
                 var cls = pkg.ExportClass(a);
                 bool on = SlotOf(mappings, cls, "Actor", "bHidden") is { } slot && HiddenValue(pkg.GetExportData(a), slot, mappings, cls);

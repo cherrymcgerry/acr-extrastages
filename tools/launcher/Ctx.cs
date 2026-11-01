@@ -17,6 +17,17 @@ internal sealed class Ctx
     public bool Force { get; init; }
     public bool NoVerify { get; init; }
     public bool KeepTemp { get; init; }
+    /// stage-build --visuals-vegetation: none (v1.4 default) or billboards (v1.12, DR2 billboard atlases).
+    public string Vegetation { get; init; } = "none";
+    /// stage-build --native-foliage: v1.13, DR2's plants as ACR's own instanced foliage (implies --vegetation native).
+    public bool NativeFoliage { get; init; }
+    /// stage-build --native-props: v1.14, DR2's fences, posts, signs, start gantry, timers, cones and rocks as ACR props,
+    /// ground grass beside the road and a stony texture on steep banks (implies --native-foliage).
+    public bool NativeProps { get; init; }
+    /// v1.15 --acr-ground: the DR2 ground bake tiles get ACR's detail normal (stage-build --visuals-ground-detail).
+    public bool AcrGround { get; init; }
+    /// v1.15 --acr-road: the road uses Hafren's own layered gravel material (stage-build --visuals-dr2-revert road).
+    public bool AcrRoad { get; init; }
     public bool IgnoreDisk { get; init; }
     public bool Copy { get; init; }
     public double? MaxLengthKm { get; init; }

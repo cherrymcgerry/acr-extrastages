@@ -42,7 +42,8 @@ Recorded 2026-10-23. Nothing below has been published.
 Tag `v<version>` and let the release workflow build, rather than uploading a local build, so the
 published zip and its hash come from the same pipeline.
 
-- [ ] The workflow produced `ACR-Extra-Stages-<version>.zip` and `SHA256SUMS.txt` as a **draft**
+- [ ] The workflow produced `ACR-Extra-Stages-<version>.zip` and `SHA256SUMS.txt`, and
+      `ACR-Extra-Stages-<version>-linux-x64.tar.gz` and `SHA256SUMS-linux-x64.txt`, as a **draft**
       release.
 - [ ] Download the zip from the draft release (not from your local `dist\`) for every check below.
 
@@ -72,6 +73,9 @@ docs\troubleshooting.md, docs\updating-after-a-patch.md   (optional but recommen
 - [ ] No dev-only tools (`stage-validate`, test helpers).
 - [ ] `config\stages.toml` contains our own stage list and text only.
 - [ ] Zip size is plausible (tens of MB; hundreds of MB would mean something was added by mistake).
+- [ ] **Linux archive** (`tar -tzf ...-linux-x64.tar.gz`): the same list without `.exe`, plus
+      `THIRD_PARTY_NOTICES-SkiaSharp.txt`; no `.dll` files, no `liboo2core*`, the six executables
+      keep their executable bit (`tar -tvzf`).
 
 ## 4. SHA-256
 
@@ -169,6 +173,11 @@ Test steps (record pass/fail and the ACR build for each):
 - [ ] (Optional, full run) all 30 stages install and the menus show them; record the disk used
       against the README estimate (`scripts\estimate-disk.ps1`), so the "to be confirmed for the
       release" note in the README can be replaced by measured numbers.
+
+**Linux:** on a distribution other than the developer's (ideally one with
+`kernel.yama.ptrace_scope` 1, such as Ubuntu), extract the tarball in the home folder and run
+`./AcrExtraStages install --yes`: the ptrace hint must appear and the `setcap` line from
+[linux.md](linux.md) must fix it; one stage must build, install and load in game under Proton.
 
 Write the results (date, ACR build, pass/fail per step, log excerpts without personal paths) into the
 release notes, and mark here what was **not** run.

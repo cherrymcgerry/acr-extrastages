@@ -20,7 +20,7 @@ internal static class Mappings
             return manual is not null ? new(manual, "user-supplied usmap", null) : new(null, "acr-mappings", why);
         }
         var m = Manual(c);
-        return m is not null ? new(m, "user-supplied usmap", null) : new(null, "none", "acr-mappings.exe not found and no --usmap / ACR_USMAP file");
+        return m is not null ? new(m, "user-supplied usmap", null) : new(null, "none", $"{Layout.Exe("acr-mappings")} not found and no --usmap / ACR_USMAP file");
     }
 
     static string? Manual(Ctx c)
@@ -73,7 +73,7 @@ internal static class Mappings
                 else Ui.Err("  dump failed: " + Last(d));
             }
         }
-        else Ui.Warn("  acr-mappings.exe not found; a Dumper-7 usmap is needed.");
+        else Ui.Warn($"  {Layout.Exe("acr-mappings")} not found; a Dumper-7 usmap is needed.");
 
         var manual = Manual(c);
         if (manual is not null)

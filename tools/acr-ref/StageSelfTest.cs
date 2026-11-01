@@ -110,10 +110,10 @@ internal static class StageSelfTest
 
 internal static class HostPaths
 {
-    public const string Baked = @"acr\Content\Environments\WalesS4HafrenSouth\DataAssets\DA_WalesS4HafrenSouthBakedData";
-    public const string Cell = @"acr\Content\Levels\WalesS4HafrenSouth\_Generated_\22VG0QIP9ATUQI633K86KWPFP";
-    public const string Variants = @"acr\Content\Data\Database\Main\TrackSelection\DT_TracksVariants";
-    public const string Pacenote = @"acr\Content\Data\Pacenote\Tables\DT_PacenoteHafrenSouthForward";
+    public const string Baked = @"acr/Content/Environments/WalesS4HafrenSouth/DataAssets/DA_WalesS4HafrenSouthBakedData";
+    public const string Cell = @"acr/Content/Levels/WalesS4HafrenSouth/_Generated_/22VG0QIP9ATUQI633K86KWPFP";
+    public const string Variants = @"acr/Content/Data/Database/Main/TrackSelection/DT_TracksVariants";
+    public const string Pacenote = @"acr/Content/Data/Pacenote/Tables/DT_PacenoteHafrenSouthForward";
     public static readonly string[] All = [Baked, Cell, Variants, Pacenote];
 
     /// The .uasset or .umap header path under a retoc legacy root.

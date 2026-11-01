@@ -16,3 +16,58 @@ hidden_layer = "DataLayer_C2CDF8EA4FD154BD45E63F93ACB7BD69"
 hide_actor_classes = ["WorldPartitionHLOD", "BP_TreelinesContainer_C", "BC_MyhTurbineA_C"]
 # actors any of whose components reference a mesh matching one of these
 hide_meshes = ["^SM_WalesS4HafrenSouthTerrain", "^SM_S4HafrensSouthBG", "^SM_(Spruce|Larch|Beech)", "^SM_Treeline"]
+
+[native_foliage]
+# v1.13 (stage-build --native-foliage 1; NativeFoliage.cs): DR2's plants drawn as ACR's own instanced foliage. Hafren's
+# PCG stamp components in the persistent level (service-park trees, tagged ServicePark) are reused as hosts: each gets
+# one ACR mesh and the DR2 plants mapped to it; hosts left over are emptied. Every HISM of a host actor must be listed.
+# Stamp _9 (3 HISMs) hosts [native_props] instances and _1 the grass, so they are not listed here; _8's second HISM is
+# listed but left to [native_props] when that runs (emptied here otherwise).
+hosts = ["PCGStamp_3d3e525db80efa5b_4/HISM_SM_SpruceWales01_0", "PCGStamp_3d3e525db80efa5b_3/HISM_SM_SpruceWales01_0", "PCGStamp_3d3e525db80efa5b_2/HISM_SM_SpruceWales01_0", "PCGStamp_3d3e525db80efa5b_2/HISM_SM_SpruceWales01_1", "PCGStamp_3d3e525db80efa5b_14/HISM_SM_SpruceWales06_1", "PCGStamp_3d3e525db80efa5b_22/HISM_SM_SpruceWales06_1", "PCGStamp_3d3e525db80efa5b_8/HISM_SM_SpruceWales01_3", "PCGStamp_3d3e525db80efa5b_8/HISM_SM_SpruceWales06_2"]
+# "<DR2 template regex> => <ACR mesh>, <ACR mesh> [; clump <max plants>]": first match wins; sized to the DR2 plant's
+# height; a clump scatters up to that many ACR plants over the DR2 plant's footprint (bushes, grasses)
+species = ["^pohutukawa_0[0-9]_ => /Game/Foliage/Trees/Olivetree/SM_Olivetree01, /Game/Foliage/Trees/Olivetree/SM_Olivetree03", "^(maple|ash)_ => /Game/Foliage/Trees/Blackmaple/SM_Blackmaple02", "^poplar_ => /Game/Foliage/Trees/Silverbirch/SM_Silverbirch08", "^pohutukawa_bush_ => /Game/Foliage/Trees/Boxthorn/SM_Boxthorn01, /Game/Foliage/Trees/Smoketree/SM_Smoketree02; clump 3", "^hawthorn_bush_ => /Game/Foliage/Trees/Smoketree/SM_Smoketree02, /Game/Foliage/Trees/Silverbirch/SM_Silverbirch08; clump 3", "^(pampas_grass|harakeke)_ => /Game/Foliage/GroundCover/Greece/HighGrass/SM_HighGrass_01; clump 4", "^(fern_large|tree_fern|banana_palm)_ => /Game/Foliage/Trees/Smoketree/SM_Smoketree02; clump 2", "^douglas_fir_03_b => /Game/Foliage/Trees/SpruceWales/SM_SpruceWales05", "^douglas_fir_(03_[ac]|05_c) => /Game/Foliage/Trees/SpruceWales/SM_SpruceWales01", "^douglas_fir_05_ => /Game/Foliage/Trees/SpruceWales/SM_SpruceWales06", "^scots_pine_ => /Game/Foliage/Trees/Blackpine/SM_Blackpine01", "^(birch|oak)_ => /Game/Foliage/Trees/Silverbirch/SM_Silverbirch13", "^bush_spruce_ => /Game/Foliage/Trees/SpruceWales/SM_SpruceWales04; clump 2", "^(bush_(fine|teardrop_leaf|thin_stem|long_leaf)|gorse_bush)_ => /Game/Foliage/Trees/Smoketree/SM_Smoketree02; clump 3"]
+scale_range = [0.5, 1.8]         # ACR plant scale (DR2 height / mesh height) is clamped to this
+crown_clearance_low = 0.8        # fraction of the plan radius kept off road surfaces (plants up to tall_m)
+crown_clearance_tall = 0.45      #   (taller trees: their crowns may overhang above the car)
+tall_m = 8
+min_centreline_offset_m = 4      # plants closer to the DR2 centreline are dropped (and any on a road surface)
+leaf_instances = 16              # cluster tree leaf size
+drop_tags = ["ServicePark"]      # ACR hides actors with this tag during a stage (acr-mappings live)
+
+[native_props]
+# v1.14 (stage-build --native-props 1, launcher --native-props; NativeProps.cs): DR2's man-made objects as ACR's own
+# meshes (any ACR map), ground grass beside the road. Replaced DR2 objects are left out of the visuals mesh; their
+# colliders stay. Instanced rules go on these stamp HISMs (one mesh each, most instances first; all of the actor's HISMs
+# listed); the other rules go one prop per service-park StaticMeshActor (about 240 usable), nearest the road first.
+instanced_hosts = ["PCGStamp_3d3e525db80efa5b_9/HISM_SM_BeechBare02_5", "PCGStamp_3d3e525db80efa5b_9/HISM_SM_BeechBare03_4", "PCGStamp_3d3e525db80efa5b_9/HISM_SM_SpruceWales08_6", "PCGStamp_3d3e525db80efa5b_8/HISM_SM_SpruceWales06_2"]
+# "<DR2 template regex> => <ACR mesh>, <ACR mesh> [; fit none|height|size|length] [; instanced] [; material <MI>]":
+# first match wins. material: for meshes whose own material is a placeholder (the gantries: ACR's BC_Gantry* blueprints
+# set it), written into a host's OverrideMaterials slot (72 service-park hosts have one).
+# Long plan axes are aligned and plan centres matched; the ACR pivot (z 0) stands on the DR2 object's. fit length tiles
+# the mesh along the DR2 object (rounded count) and stretches it to the DR2 length and height; size / height scale
+# uniformly (with a random yaw). Single props are upright at scale 1 (pick the mesh variant that fits). Thumbnails:
+# acr-ref mesh-thumbs --filter <regex> --out sheet.png.
+rules = ["^core_barr_fence_wire_mid(_hlf)?_b$ => /Game/Props/Fences/SmallFencesB/SM_SmallFenceB1; fit length; instanced", "^core_barr_fence_log_mid(_hlf)?_a$ => /Game/Props/LivignoProps/ItaLivModualarFencingC/SM_ItaLivModualarFencingC2; fit length; instanced", "^(nz_rock_0[12]|rock_0[0-9]|rock_group_) => /Game/Props/Nature/ForestBoulderVecsch2qx/SM_ForestBoulderVecsch2qx; fit size; instanced", "^pole_(tape|mesh)$ => /Game/Props/RallyProps/TapePlasticPoleA/SM_PlasticTapePoleA; instanced", "^(sco_tree_stump_|sco_stumps_) => /Game/Props/Nature/TreeStumpTswbbdfa/SM_TreeStumpTswbbdfa; fit size; instanced", "^(sco_log_(0[0-9]|single_|large_)|douglas_fir_fallen_) => /Game/Props/Nature/WoodLog/SM_WoodLogD; fit length; instanced", "^(sco_log_pile_|sco_logsb_|wal_logsb_) => /Game/Props/Nature/WoodenLogQdtdp/SM_WoodenLogQdtdp", "^core_game_startfinish_i => /Game/Props/RallyProps/Gantries/SM_RallyGantry7m; material /Game/Props/RallyProps/Gantries/MI_RallyGantryWales", "^core_game_(lazer(start|finish)_b_(left|right)|starttimer_b)$ => /Game/Props/RallyProps/RaceTimer/SM_RaceTimer", "^core_game_rcsign_g_var => /Game/Props/RallyProps/Signs/SM_RaceFlyingFinish", "^core_game_rcsign_i_var => /Game/Props/RallyProps/Signs/SM_RaceStopControl", "^core_game_rcsign_ => /Game/Props/RallyProps/NoPublicSign/SM_NoPublicSignA", "^core_barr_cone_a$ => /Game/Props/RallyProps/TrafficConeA/SM_TrafficConeA2", "^core_sign_roadmarker_a$ => /Game/Props/RallyProps/WoodenNarrowBeam/SM_WoodenNarrowBeamShortStriped", "^core_barr_fence_(wire|log)_end_ => /Game/Props/Fences/SmallFencesPoles/SM_SmallFencesPole1", "^core_barr_wood_post_b$ => /Game/Props/Fences/SmallFencesPoles/SM_SmallFencesPole2, /Game/Props/Fences/SmallFencesPoles/SM_SmallFencesPole3", "^core_brand_scaffolding_cloth_ => /Game/Props/RallyProps/Banners/SM_RallySponsorBannerA", "^core_veh_car_(hatchback|sport|small)_ => /Game/Props/NonDrivableVehicles/HatchbackA/SM_HatchbackA", "^core_veh_car_estate_ => /Game/Props/NonDrivableVehicles/StationWagonA/SM_StationWagon", "^core_veh_car_(suv|pickup)_ => /Game/Props/NonDrivableVehicles/SuvA/SM_SuvA", "^core_veh_car_marshal_ => /Game/Props/NonDrivableVehicles/SecurityCarA/SM_SecurityCarA", "^core_(veh_van_|event_recov_|tv_van_|event_tv_van_) => /Game/Props/NonDrivableVehicles/VanA/SM_VanCargo, /Game/Props/NonDrivableVehicles/VanA/SM_VanCrew", "^core_sign_cattlegrid_a$ => /Game/Props/FranceTrafficSigns/SM_TrafficSignFraSheepShort", "^nz_placesign_a$ => /Game/Props/AlsaceSignage/FraSaverneSignage/SM_FraSavSignageAB"]
+hide_markers = 1                 # leave out the build's own edge posts and start/finish gates (the gantries replace them)
+hide_flat_colours = 1            # DR2 objects without an ACR prop or a DR2 texture are not drawn in flat class colours
+                                 #   (their colliders stay); checked: none within 30 m of the road
+leaf_instances = 16
+# grass: Hafren's service-park wild grass (its material keeps its own colour; MI_WildGrass01 takes the landscape's
+# runtime virtual texture, which these stages lack: black) scattered at random, thinner near the road, whole clump off
+# road surfaces
+grass_host = "PCGStamp_3d3e525db80efa5b_1/HISM_SM_WildGrassServicePark_0"
+grass_mesh = "/Game/Foliage/GroundCover/WildGrass/SM_WildGrassServicePark"
+grass_per_100m2 = 20             # 0 = no grass
+grass_min_offset_m = 3.5         # from the DR2 centreline
+grass_max_offset_m = 18
+grass_ramp_m = 5                 # density ramps from 15 % at the min offset to full over this distance
+grass_max_slope_deg = 35
+# v1.16 edge grass: small clumps along both road edges, centred just beyond the road surface so the blades reach over
+# the gravel (vanilla gravel roads have no edge line); 0 spacing = none
+edge_grass_spacing_m = 0.6
+edge_grass_keep = 0.7            # share of the spots that get a clump (gaps look natural)
+edge_grass_out_min_m = -0.3      # clump centre beyond the road surface's edge (negative: on the gravel, so blades overlap it)
+edge_grass_out_max_m = 0.2
+edge_grass_scale_min = 0.5
+edge_grass_scale_max = 1.0

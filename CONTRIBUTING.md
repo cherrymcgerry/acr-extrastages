@@ -41,9 +41,11 @@ Generated stages are for **offline, single-player** play. Contributions must kee
 
 ## Building from source
 
-Requirements: Windows 10/11, the [.NET 10 SDK](https://dotnet.microsoft.com/download), Git, a
-Rust toolchain from [rustup](https://rustup.rs/) (to install retoc), PowerShell 7 (`pwsh`), and
-your own installs of *Assetto Corsa Rally* (Steam) and *DiRT Rally 2.0*.
+Requirements: Windows 10/11 or Linux (x86-64), the
+[.NET 10 SDK](https://dotnet.microsoft.com/download), Git, a Rust toolchain from
+[rustup](https://rustup.rs/) (to install retoc), PowerShell 7 (`pwsh`), and your own installs of
+*Assetto Corsa Rally* (Steam) and *DiRT Rally 2.0*. The steps below use Windows paths; on Linux see
+[Building on Linux](#building-on-linux).
 
 1. **Bootstrap the third-party clones** (pinned commits, plus our local patches in
    `tools/dr2-extract/vendor-patches/`):
@@ -112,12 +114,40 @@ your own installs of *Assetto Corsa Rally* (Steam) and *DiRT Rally 2.0*.
    up to ~58 GB of extracted DR2 location archives on disk (about 115 GB working peak). Details and
    measurements: `docs/resume-notes.md`, "Disk budget".
 
+## Building on Linux
+
+The tools build and run natively on Linux for ACR played through Steam + Proton (users' side:
+[docs/linux.md](docs/linux.md)). The PowerShell scripts above run unchanged under PowerShell 7 on
+Linux (`pwsh -NoProfile -File scripts/bootstrap.ps1`, and so on).
+
+- **One command:** `scripts/install-linux.sh` bootstraps, runs `scripts/package.ps1` and installs
+  the result (it installs `pwsh` for the checkout when it is missing).
+- **Release archive:** `pwsh -NoProfile -File scripts/package.ps1` on Linux writes
+  `dist/ACR-Extra-Stages-<version>-linux-x64.tar.gz` and `dist/SHA256SUMS-linux-x64.txt`. The
+  package always targets the OS it is built on; the release workflow builds both.
+- **Developer layout:** the launcher also finds the tools in their developer locations, without
+  `.exe` (`work/bin/<tool>/<tool>`, `work/bin/bin/retoc`, `tools/acr-mappings/target/release/`).
+  Publish the .NET tools with `dotnet publish tools/<tool> -c Release -o work/bin/<tool>` (add
+  `-r linux-x64 --self-contained` if `dotnet` is not in a default location, or set `DOTNET_ROOT`).
+- **Mappings:** `acr-mappings` reads the Proton game through `/proc/<pid>/mem`; distributions with
+  `kernel.yama.ptrace_scope` 1 need `sudo setcap cap_sys_ptrace=ep <acr-mappings>` once (see
+  [docs/linux.md](docs/linux.md#the-mappings-step-and-ptrace)). Dumper-7 is Windows-only.
+- **Platform code:** keep Windows behaviour unchanged when adding Linux code. The launcher guards
+  platform APIs with `OperatingSystem.IsWindows()`, picks `Logos.cs` (GDI+) or `Logos.Skia.cs`
+  (SkiaSharp) per runtime identifier in its csproj, and `acr-mappings/src/process.rs` has one
+  `imp` module per OS. Build paths from components (`Path.Combine`) or with `/`, never with `\`.
+- **Fedora Atomic** (Bazzite, Silverblue): `/home` is a symlink to `/var/home`. Build from one
+  spelling of the checkout path; MSBuild's incremental clean deletes outputs it recorded under the
+  other one (the scripts use the physical path).
+
+CI builds and tests on `windows-latest` and `ubuntu-latest`.
+
 ## Repository layout
 
 | Path | Purpose |
 |---|---|
 | `config/` | Our own stage list, location text, sky, visual and pace-note mappings. |
-| `scripts/` | PowerShell build, prepare and install scripts. |
+| `scripts/` | PowerShell build, prepare and install scripts; `install-linux.sh` for Linux. |
 | `mods/` | Per-mod build scripts (`additive`, `stage`, `loadproof`); `mods/common` has shared helpers. |
 | `tools/dr2-extract` | DR2 reader/exporter (uses `ego.nefsedit` and `Ego-Engine-Modding`). |
 | `tools/acr-ref` | ACR reader and stage builder (CUE4Parse based). |

@@ -55,7 +55,7 @@ pub fn open_ue<'m>(
         module: &module.info,
         code: module.code.iter().map(|(b, v)| Region { base: *b, bytes: v }).collect(),
         data: module.data.as_ref().map(|(b, v)| Region { base: *b, bytes: v }),
-        srwlock_fns: srwlock_fns(),
+        srwlock_fns: srwlock_fns(dmem, modules),
         sigs,
     };
     let (gobj, layout) = resolve_gobjects(&scan).map_err(|e| anyhow!("GObjects: {e}"))?;

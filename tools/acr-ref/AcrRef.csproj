@@ -10,6 +10,7 @@
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="BCnEncoder.Net" Version="2.2.1" />
     <PackageReference Include="CUE4Parse" Version="1.2.2.202610" />
     <PackageReference Include="Iced" Version="1.21.0" />
     <PackageReference Include="Microsoft.Bcl.Memory" Version="10.0.12" />

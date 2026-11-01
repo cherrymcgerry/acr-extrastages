@@ -40,7 +40,7 @@ internal sealed class Layout
     /// Candidate locations per tool, release layout first.
     public IEnumerable<string> ToolCandidates(string name)
     {
-        var exe = name + ".exe";
+        var exe = Exe(name);
         if (ToolsOverride is not null)
         {
             yield return Path.Combine(ToolsOverride, name, exe);
@@ -65,10 +65,13 @@ internal sealed class Layout
         }
     }
 
+    /// A tool's file name on this platform: `name.exe` on Windows, `name` on Linux.
+    public static string Exe(string name) => OperatingSystem.IsWindows() ? name + ".exe" : name;
+
     public string? FindTool(string name) => ToolCandidates(name).FirstOrDefault(File.Exists);
 
     public string Tool(string name) => FindTool(name)
-        ?? throw new LauncherException($"{name}.exe not found (looked in tools\\{name}\\ next to the launcher and in work\\bin); " +
+        ?? throw new LauncherException($"{Exe(name)} not found (looked in {Path.Combine("tools", name)} next to the launcher and in {Path.Combine("work", "bin")}); " +
                                        "re-extract the release zip, or build it (CONTRIBUTING.md)");
 
     public static readonly string[] ToolNames = { "acr-ref", "acr-additive", "dr2-extract", "retoc", "acr-mappings" };
