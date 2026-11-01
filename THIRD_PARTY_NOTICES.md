@@ -103,6 +103,12 @@ the modified code remains copyright (c) 2020 victorbush.
 on common Rust crates (anyhow, clap, ctrlc, serde, serde_json, windows) that are
 MIT/Apache-2.0 dual-licensed; see its `Cargo.lock` for versions.
 
+`tools/acr-autoshot` (Linux development tool, not part of releases) is a Python script whose save-slot
+reading/writing and menu-screen recognition are adapted from
+[acr-daily](https://github.com/khanhonthetrack/acr-daily) (`client/acr_daily/saveslot.py`, `autodrive.py`,
+commit `b68dc23688f9`, MIT, Copyright (c) 2026 Ngoc Khanh Nguyen). It uses Pillow (MIT-CMU) and python-evdev
+(BSD-3-Clause) from the system, not bundled.
+
 ## Transitive packages
 
 NuGet packages in the dependency closure of `acr-ref`, `acr-additive` and `dr2-extract`
@@ -159,6 +165,7 @@ The components below are licensed under the MIT License, with the copyright hold
 - K4os.Compression.LZ4 / K4os.Hash.xxHash: Copyright (c) 2017 Milosz Krajewski
 - VGAudio: Copyright (c) 2016 Thealexbarney
 - Microsoft .NET libraries: Copyright (c) .NET Foundation and Contributors
+- acr-daily (adapted in tools/acr-autoshot): Copyright (c) 2026 Ngoc Khanh Nguyen
 
 The MIT License:
 
