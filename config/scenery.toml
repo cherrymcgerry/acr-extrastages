@@ -63,3 +63,11 @@ grass_min_offset_m = 3.5         # from the DR2 centreline
 grass_max_offset_m = 18
 grass_ramp_m = 5                 # density ramps from 15 % at the min offset to full over this distance
 grass_max_slope_deg = 35
+# v1.16 edge grass: small clumps along both road edges, centred just beyond the road surface so the blades reach over
+# the gravel (vanilla gravel roads have no edge line); 0 spacing = none
+edge_grass_spacing_m = 0.6
+edge_grass_keep = 0.7            # share of the spots that get a clump (gaps look natural)
+edge_grass_out_min_m = -0.3      # clump centre beyond the road surface's edge (negative: on the gravel, so blades overlap it)
+edge_grass_out_max_m = 0.2
+edge_grass_scale_min = 0.5
+edge_grass_scale_max = 1.0

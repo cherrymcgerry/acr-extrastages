@@ -40,6 +40,14 @@ docs/visual-preview.md. Renders the built cell's visuals mesh next to the full D
 writes contact.png, station images and metrics.json (vegetation/object coverage, agreement). ~6 s per stage. It cannot
 show ACR materials or level actors (native foliage is not in it).
 
+## In-game screenshots: `acr-autoshot` (Linux)
+
+docs/autoshot.md. `tools/acr-autoshot/acr-autoshot.py run --stage AcrXsNz01r5 --shots 2` writes the stage into the
+game save, starts ACR, drives the menus to a Free Practice (screens told apart by the red highlight), screenshots the
+start line, closes the game and restores the save: ~2 min per stage, into `work/autoshot/shots/`. The user must not
+touch the PC meanwhile. The title shows PRESS ANY BUTTON first, then "Loading" with the logo still up: extra keys
+there land on HOME (opens the wrong tile). New menu paths: `record` the user's own presses.
+
 ## How a stage is built (short)
 
 The stage is a relocated copy of Hafren South (`/Game/AcrXs/Stages/<id>/<id>.umap`, persistent level plus cell
@@ -89,6 +97,22 @@ Texture2D + MaterialInstanceConstant packages cloned from cooked templates (Drop
     `acr-ref export <MI>` (StaticParametersRuntime).
   - `hide_flat_colours`: DR2 objects with neither an ACR prop nor a DR2 texture are not drawn (colliders stay); a check
     fails if any flat class colour is drawn within 30 m of the road.
+  - **ProceduralMesh UVs are half floats in the renderer.** World-scale or distance-along UVs (hundreds of repeats)
+    snap in visible steps: long stretched stripes ("barcode"). Keep UVs small: BoxUv shifts each triangle by whole
+    repeats into 0..1 (verify check "terrain box UVs within +-N repeats"). The road's UV0/UV1 V still grow along the
+    stage (up to ~1300 repeats at 4.7 km): probably the "road stripes" further along.
+  - **Road edge (v1.16, `[road] smooth_edge`, RoadEdge.cs):** the road section is whole DR2 collision triangles, so its
+    outline is a row of teeth. It is cut to a smooth, slightly wandering line along the tooth tips, the notches filled
+    with the collision ground there (shares the road's edges). Render ground left under the road is sunk below it.
+    Ground triangles are dropped under the road only when a 20 cm grid of points over them is on the road (a 50 cm
+    cell mask and 7-point test left sky-blue slivers).
+  - **Hafren's layered road material** (M_RoadSurface_Layered): UV1 must run 0..1 edge to edge (RoadUv maps it to the
+    drawn edges); UV3 must be a plan mapping at Hafren's scale (`road_uv3_world_m`, ~170 m per unit). The mirrored
+    trajectory there drew dark mud streaks along the whole road. Vertex green raises the light loose-gravel layer
+    (`road_edge_green`, ramped over the last `road_edge_blend_m`); across the whole road it changed nothing visible.
+    Hafren's own road edges come from per-tile baked mask textures (MI_HafrenSouthGravelRoadside*), not reusable.
+  - **Edge grass** (`edge_grass_*` in `[native_props]`): small clumps along both road edges, centred on the outer
+    gravel, so blades cover the edge like on Hafren (where tufts grow over the gravel and there is no edge line).
   - Steep ground (`--visuals-steep`, `[dr2_textures] steep*`): faces over 40 deg get ACR's tileable rock texture
     (`steep_acr_texture`, referenced from a new M_Simple MIC) or a DR2 slice, box-projected every `steep_tile_m`.
   - Choose meshes by shape with `acr-ref mesh-thumbs --filter <regex> --out sheet.png` (LOD0 / Nanite fallback, flat
@@ -112,6 +136,9 @@ Texture2D + MaterialInstanceConstant packages cloned from cooked templates (Drop
   (`--native-foliage`), native props (`--native-props`), ACR ground detail (`--acr-ground`) and road (`--acr-road`).
   User docs: docs/native-assets.md. **Tuned and checked in game on New Zealand (AcrXsNz01r5) only.** Scotland rules
   (8 stages build) are untested in game.
-- Open: road texture stripes on some NZ sections with the DR2 road (the ACR road replaces it), small ground holes on
-  banks, steep-bank texture still streaky where box projection switches axis, ground colour resolution (DR2 bake,
-  about 14 cm/px), single props facing (front/back unknown), ACR gantry branding (Wales).
+- Fixed 2026-11-01 (checked in game on the NZ start): steep-bank "barcode" (half-float UVs), sky-blue holes and
+  saw-tooth road edges, dark mud-streak road look (UV3), light wedges at the verge (rock only on steep patches at least
+  `steep_min_height_m` tall), grass over the road edge. Review loop: `.claude/skills/stage-visual-review`.
+- Open: road UV0/UV1 along the stage (half floats, see above), a flat brown strip with a straight lip on the NZ start's
+  rock bank, ground colour resolution (DR2 bake, about 14 cm/px), single props facing (front/back unknown), ACR gantry
+  branding (Wales; ACR has only Alsace, Greece, Monte Carlo and Wales gantry materials).

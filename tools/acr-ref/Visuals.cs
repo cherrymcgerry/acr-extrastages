@@ -129,7 +129,15 @@ internal static class Visuals
                 AddTri(target, Add(a0), Add(b0), Add(c0));
             }
         }
-        if (opt.Ground == "render") (terrain, r["ground"]) = RenderGround(ir, pl, cfg, terrain, road, keepWinding: opt.GroundLod);
+        // v1.16: the road's outline is whole collision triangles (teeth against the grass); cut it to an organic line
+        bool smoothEdge = cfg["road"].TryGetValue("smooth_edge", out var se) && se is double sed && sed != 0;
+        Func<int, double, double>? roadHalfWidth = null;
+        if (smoothEdge)
+        {
+            var (er, hw) = RoadEdge.Apply(road, ir.Centre.Select(pl.ToUe).Select(q => new Vector2((float)q.X, (float)q.Y)).ToList(), cfg, fill: terrain);
+            r["road_edge"] = er; roadHalfWidth = hw;
+        }
+        if (opt.Ground == "render") (terrain, r["ground"]) = RenderGround(ir, pl, cfg, terrain, road, keepWinding: opt.GroundLod, sinkUnderRoad: smoothEdge);
         if (opt.GroundLod)
         {
             if (opt.Ground != "render") throw new ArgumentException("--visuals-ground-lod needs --visuals-ground render");
@@ -204,7 +212,7 @@ internal static class Visuals
         if (opt.Textured)
         {
             ground = "textured";
-            r["textured"] = RoadUv.Apply(ir, pl, cfg, road);
+            r["textured"] = RoadUv.Apply(ir, pl, cfg, road, roadHalfWidth);
             float k = (float)(4 / cfg.Num("textured", "terrain_uv_m"));
             for (int i = 0; i < terrain.Uv.Count; i++) terrain.Uv[i] *= k;
         }
@@ -220,11 +228,12 @@ internal static class Visuals
             if (opt.Steep)
             {
                 double cosMax = Math.Cos(cfg.Num("dr2_textures", "steep_min_deg") * Math.PI / 180);
-                (terrain, steepSec) = SplitTriangles(terrain, (a, b, c) =>
-                {
-                    var n = Vector3.Cross(b - a, c - a); float l = n.Length();
-                    return l > 0 && Math.Abs(n.Z / l) < cosMax;
-                });
+                // v1.16: only real banks get the rock: connected patches of steep faces at least steep_min_height_m tall;
+                // a small patch (a kerb between verge and grass) showed as light wedges and keeps the ground colour
+                float minH = cfg["dr2_textures"].TryGetValue("steep_min_height_m", out var smh) && smh is double smhd ? (float)(smhd * 100) : 0;
+                var tall = SteepPatchesTall(terrain, cosMax, minH);
+                int tri = 0;
+                (terrain, steepSec) = SplitTriangles(terrain, (a, b, c) => tall[tri++]);
             }
             var tiles = GroundLod.LoadTiles(manifest);
             var (used, rest, brep) = GroundLod.Split(terrain, pl, tiles);
@@ -660,7 +669,12 @@ internal static class Visuals
                 nTri++; minRatio = Math.Min(minRatio, ratio); if (ratio < 0.5) steep++;
             }
             if (opt.TerrainUv == "box")
+            {
                 C(steep == 0 && minRatio >= 0.57, $"visuals: terrain box UVs: UV / true area at least {minRatio:0.000} on all {nTri} triangles (1/sqrt 3 = 0.577; none stretched)");
+                // the engine renders these UVs as half floats: keep them near 0 (half has 1/1024 steps below 2)
+                float far = tr.Uv.Count == 0 ? 0 : tr.Uv.Max(u => Math.Max(Math.Abs(u.X), Math.Abs(u.Y)));
+                C(far <= 16, $"visuals: terrain box UVs within +-{far:0.0} repeats (at most 16: half-float UV precision)");
+            }
             else w.WriteLine($"     visuals: terrain planar UVs: {steep} of {nTri} triangles stretched more than 2x (UV / true area < 0.5), worst {minRatio:0.000}");
         }
         if (opt.Dr2On("road"))
@@ -677,10 +691,12 @@ internal static class Visuals
             var (inside, mu, mv) = RoadUv.Stretch(road, nomU, nomV);
             double min = cfg.Num("textured", "road_stretch_min_fraction");
             bool layout = new[] { road.Uv1, road.Uv2, road.Uv3 }.All(l => l.Count == road.Pos.Count)
-                          && road.Uv1.All(u => u.X >= 0 && u.X <= 1) && road.Color == RoadUv.Bgra(cfg, "road_color");
+                          && road.Uv1.All(u => u.X >= 0 && u.X <= 1)
+                          // road_color on every vertex; green may ramp toward the edges ([textured] road_edge_blend_m)
+                          && road.Colors.All(c => (c & 0xFFFF00FFu) == (RoadUv.Bgra(cfg, "road_color") & 0xFFFF00FFu));
             C(layout && inside >= min && Math.Abs(mu / nomU - 1) < 0.15 && Math.Abs(mv / nomV - 1) < 0.15,
               $"visuals: road UVs follow the road: UV0 median {mu:0.##} m across / {mv:0.##} m along per unit (nominal {nomU} / {nomV}), " +
-              $"{inside:P1} of {road.Idx.Count / 3} triangles within 1.5x (min {min:P0}); UV1..UV3 on every vertex, UV1.U in 0..1, colour {road.Color:X8}");
+              $"{inside:P1} of {road.Idx.Count / 3} triangles within 1.5x (min {min:P0}); UV1..UV3 on every vertex, UV1.U in 0..1, colour {RoadUv.Bgra(cfg, "road_color"):X8} (green ramped on {road.Colors.Count(c => c != RoadUv.Bgra(cfg, "road_color"))} vertices)");
         }
         if (opt.Vista)
         {
@@ -770,7 +786,7 @@ internal static class Visuals
     }
 
     /// Highest up-facing (|n_z| >= 0.3) triangle under a plan point, UE cm, bucketed on a 4 m grid.
-    sealed class TopSurface
+    internal sealed class TopSurface
     {
         const float Cell = 400;
         readonly Dictionary<(int, int), List<(Vector3 a, Vector3 b, Vector3 c)>> _cells = new();
@@ -978,15 +994,30 @@ internal static class Visuals
 
     /// v1.10 ground: DR2's render terrain (render/terrain.glb) inside the physics bounds instead of the collision ground,
     /// which only covers a ribbon along the road. Render triangles whose vertices, edge midpoints and centre all lie over the collision
-    /// road (cells of [ground] road_mask_cm) are dropped, the road section stays (RoadUv) and is raised by road_lift_cm:
+    /// road triangles (an exact plan test: a cell mask let triangles up to a cell past the road edge go, which showed as
+    /// sky-blue slivers along the edges) are dropped, the road section stays (RoadUv) and is raised by road_lift_cm:
     /// both meshes share heights over the road. Collision ground triangles over no render terrain are kept as a fill.
     /// keepWinding (v1.11): render triangles keep DR2's winding (per mesh, turned so most of it faces up) instead of each
     /// being turned to face up, which turned folded or overhanging faces away from the camera (back-face culled).
     static (ProcMesh.Section, JsonObject) RenderGround(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ProcMesh.Section collisionTerrain, ProcMesh.Section road,
-                                                       bool keepWinding = false)
+                                                       bool keepWinding = false, bool sinkUnderRoad = false)
     {
-        var roadMask = new PlanMask(cfg.Num("ground", "road_mask_cm"));
-        for (int t = 0; t + 2 < road.Idx.Count; t += 3) roadMask.Add(road.Pos[(int)road.Idx[t]], road.Pos[(int)road.Idx[t + 1]], road.Pos[(int)road.Idx[t + 2]]);
+        var roadTop = new TopSurface();
+        for (int t = 0; t + 2 < road.Idx.Count; t += 3) roadTop.Add(road.Pos[(int)road.Idx[t]], road.Pos[(int)road.Idx[t + 1]], road.Pos[(int)road.Idx[t + 2]]);
+        // the road's edge is saw-toothed (whole DR2 collision triangles): a triangle is under the road only when a
+        // barycentric grid of points at most 20 cm apart is, or it would leave a hole in the notches between the teeth
+        bool UnderRoad(Vector3 a, Vector3 b, Vector3 c)
+        {
+            float edge = MathF.Max((b - a).Length(), MathF.Max((c - b).Length(), (a - c).Length()));
+            int n = Math.Clamp((int)MathF.Ceiling(edge / 20), 2, 64);
+            for (int i = 0; i <= n; i++)
+                for (int j = 0; i + j <= n; j++)
+                {
+                    var q = a + (b - a) * ((float)i / n) + (c - a) * ((float)j / n);
+                    if (roadTop.At(new Vector2(q.X, q.Y)) is null) return false;
+                }
+            return true;
+        }
         var covered = new PlanMask(cfg.Num("ground", "fill_cell_cm"));
 
         var terrain = new ProcMesh.Section();
@@ -1021,7 +1052,7 @@ internal static class Visuals
                 var g = (ue[a] + ue[b] + ue[c]) / 3;
                 if (g.X < StageBuild.PhysMinX * 100 || g.X > StageBuild.PhysMaxX * 100 || g.Y < StageBuild.PhysMinZ * 100 || g.Y > StageBuild.PhysMaxZ * 100) { cropped++; continue; }
                 covered.Add(ue[a], ue[b], ue[c]);
-                if (new[] { ue[a], ue[b], ue[c], g, (ue[a] + ue[b]) / 2, (ue[b] + ue[c]) / 2, (ue[c] + ue[a]) / 2 }.All(q => roadMask[q])) { underRoad++; continue; }
+                if (UnderRoad(ue[a], ue[b], ue[c])) { underRoad++; continue; }
                 if (!keepWinding) AddTri(terrain, Add(a), Add(b), Add(c));
                 else if (flip) { int ia = Add(a), ic = Add(c), ib = Add(b); AddTriKeep(terrain, ia, ic, ib); }
                 else { int ia = Add(a), ib = Add(b), ic = Add(c); AddTriKeep(terrain, ia, ib, ic); }
@@ -1050,6 +1081,19 @@ internal static class Visuals
             AddTri(terrain, FAdd(a), FAdd(b), FAdd(c));
         }
 
+        // sinkUnderRoad (v1.16): render ground left under the road's edge (its triangles reach past the cut road) is pushed
+        // just below the road, so it does not show through it as tan slivers
+        int sunk = 0;
+        if (sinkUnderRoad)
+        {
+            float sink = (float)cfg.Num("road", "edge_sink_cm");
+            for (int i = 0; i < terrain.Pos.Count; i++)
+            {
+                var p = terrain.Pos[i];
+                if (roadTop.At(new Vector2(p.X, p.Y)) is double z && p.Z > z - sink) { terrain.Pos[i] = p with { Z = (float)z - sink }; sunk++; }
+            }
+        }
+
         float lift = (float)cfg.Num("ground", "road_lift_cm");
         for (int i = 0; i < road.Pos.Count; i++) road.Pos[i] += new Vector3(0, 0, lift);
 
@@ -1064,6 +1108,7 @@ internal static class Visuals
             ["collision_terrain_triangles_not_drawn"] = collisionTris - fill,
             ["road_lift_cm"] = lift,
         };
+        if (sinkUnderRoad) r["ground_vertices_sunk_under_road"] = sunk;
         if (keepWinding) r["dr2_winding_kept"] = $"{againstUp} drawn triangles face down as DR2 wound them (folds, overhangs)";
         Console.WriteLine($"visuals: render ground {source - cropped - underRoad} of {source} terrain.glb triangles ({cropped} outside the physics bounds, " +
                           $"{underRoad} under the collision road), {fill} collision fill triangles, road raised {lift} cm");
@@ -1096,12 +1141,52 @@ internal static class Visuals
         return (outs[0], outs[1]);
     }
 
+    /// Per triangle: steep (|n.z| < cosMax) and in a patch of steep triangles (joined by shared vertices) whose height
+    /// span is at least minHeight.
+    static bool[] SteepPatchesTall(ProcMesh.Section s, double cosMax, float minHeight)
+    {
+        int nt = s.Idx.Count / 3;
+        var steep = new bool[nt];
+        var parent = Enumerable.Range(0, s.Pos.Count).ToArray();
+        int Find(int x) { while (parent[x] != x) x = parent[x] = parent[parent[x]]; return x; }
+        for (int t = 0; t < nt; t++)
+        {
+            var (a, b, c) = (s.Pos[(int)s.Idx[t * 3]], s.Pos[(int)s.Idx[t * 3 + 1]], s.Pos[(int)s.Idx[t * 3 + 2]]);
+            var n = Vector3.Cross(b - a, c - a); float l = n.Length();
+            if (!(steep[t] = l > 0 && Math.Abs(n.Z / l) < cosMax)) continue;
+            int r0 = Find((int)s.Idx[t * 3]);
+            for (int k = 1; k < 3; k++) { int rk = Find((int)s.Idx[t * 3 + k]); if (rk != r0) parent[rk] = r0; }
+        }
+        var lo = new Dictionary<int, float>(); var hi = new Dictionary<int, float>();
+        for (int t = 0; t < nt; t++)
+        {
+            if (!steep[t]) continue;
+            int r = Find((int)s.Idx[t * 3]);
+            for (int k = 0; k < 3; k++)
+            {
+                float z = s.Pos[(int)s.Idx[t * 3 + k]].Z;
+                lo[r] = lo.TryGetValue(r, out var l0) ? Math.Min(l0, z) : z;
+                hi[r] = hi.TryGetValue(r, out var h0) ? Math.Max(h0, z) : z;
+            }
+        }
+        var res = new bool[nt];
+        for (int t = 0; t < nt; t++)
+            if (steep[t]) { int r = Find((int)s.Idx[t * 3]); res[t] = hi[r] - lo[r] >= minHeight; }
+        return res;
+    }
+
     static string BoxUv(ProcMesh.Section s, float repeatCm)
     {
         var pos = s.Pos.ToList(); var nrm = s.Nrm.ToList(); var idx = s.Idx.ToList();
         s.Pos.Clear(); s.Nrm.Clear(); s.Uv.Clear(); s.Idx.Clear(); s.Tan.Clear();
-        var map = new Dictionary<(uint v, int axis), uint>();
+        // The engine renders ProceduralMesh UVs as half floats: world-space UVs (hundreds of repeats on a 4 km stage)
+        // snap in steps of 1/4 repeat or more, which shows as long stretched stripes ("barcode"). Each triangle is
+        // shifted by whole repeats so its UVs start in 0..1 (the texture tiles, so the shift is invisible); vertices are
+        // duplicated per shift.
+        var map = new Dictionary<(uint v, int axis, int su, int sv), uint>();
         var perAxis = new int[3];
+        var uv = new Vector2[3];
+        float maxUv = 0;
         for (int t = 0; t + 2 < idx.Count; t += 3)
         {
             var n = Vector3.Cross(pos[(int)idx[t + 1]] - pos[(int)idx[t]], pos[(int)idx[t + 2]] - pos[(int)idx[t]]);
@@ -1110,18 +1195,25 @@ internal static class Visuals
             perAxis[axis]++;
             for (int k = 0; k < 3; k++)
             {
+                var p = pos[(int)idx[t + k]];
+                uv[k] = axis switch { 2 => new Vector2(p.X, p.Y), 0 => new Vector2(p.Y, p.Z), _ => new Vector2(p.X, p.Z) } / repeatCm;
+            }
+            int su = (int)Math.Floor(Math.Min(uv[0].X, Math.Min(uv[1].X, uv[2].X)));
+            int sv = (int)Math.Floor(Math.Min(uv[0].Y, Math.Min(uv[1].Y, uv[2].Y)));
+            for (int k = 0; k < 3; k++)
+            {
                 uint v = idx[t + k];
-                if (!map.TryGetValue((v, axis), out var nv))
+                if (!map.TryGetValue((v, axis, su, sv), out var nv))
                 {
-                    var p = pos[(int)v];
-                    map[(v, axis)] = nv = (uint)s.Pos.Count;
-                    s.Pos.Add(p); s.Nrm.Add(nrm[(int)v]);
-                    s.Uv.Add(axis switch { 2 => new Vector2(p.X, p.Y), 0 => new Vector2(p.Y, p.Z), _ => new Vector2(p.X, p.Z) } / repeatCm);
+                    map[(v, axis, su, sv)] = nv = (uint)s.Pos.Count;
+                    var u = uv[k] - new Vector2(su, sv);
+                    s.Pos.Add(pos[(int)v]); s.Nrm.Add(nrm[(int)v]); s.Uv.Add(u);
+                    maxUv = Math.Max(maxUv, Math.Max(u.X, u.Y));
                 }
                 s.Idx.Add(nv);
             }
         }
-        return $"box: {perAxis[2]} triangles on the plan plane, {perAxis[0]} on X, {perAxis[1]} on Y; {pos.Count} -> {s.Pos.Count} vertices, repeat {repeatCm / 100} m";
+        return $"box: {perAxis[2]} triangles on the plan plane, {perAxis[0]} on X, {perAxis[1]} on Y; {pos.Count} -> {s.Pos.Count} vertices, repeat {repeatCm / 100} m, UV0 0..{maxUv:0.00} (shifted per triangle by whole repeats)";
     }
 
     /// colourMapUv: UV1 = the DR2 glb plan position over the vista's plan bounds (0..1; how DR2's large vista colour map

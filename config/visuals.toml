@@ -4,6 +4,20 @@
 [road]
 # DR2 ground codes drawn with the road material; all other DR2 collision is drawn as terrain
 surfaces = ["GD0+", "CATG"]
+# v1.16 organic road edge (RoadEdge.cs): the road section is whole DR2 collision triangles, whose outline is a row of
+# teeth against the grass; 1 cuts each side to a smooth line along the notches between the teeth (running minimum over
+# half of edge_window_m, average over edge_window_m; rims of holes inside the road ignored), edge_margin_m further in,
+# wandering inward by up to edge_wander_m; render ground left under the cut road is sunk edge_sink_cm below it. Side
+# roads beyond [textured] road_follow_max_m stay whole.
+smooth_edge = 1
+edge_line = "tips"              # "tips": line along the tooth tips (full road width; the notches are filled with the collision
+                                #   ground there, seamless); "notches": along the notches (up to 1.5 m narrower near the NZ
+                                #   start, DR2's sandy ground showed where the teeth were)
+edge_window_m = 4
+edge_margin_m = 0.05
+edge_wander_m = 0.15
+edge_min_half_m = 1.5
+edge_sink_cm = 3
 
 [markers]
 spacing_m = 15          # edge posts along both gate edges
@@ -74,7 +88,6 @@ min_distance_m = 50             # offline check: nearest vista vertex to the DR2
 # only with stage-build --visuals-ground render (build.ps1 v1.10): the terrain section is DR2's render terrain
 # (render/terrain.glb) instead of its collision ground, which covers only a ribbon along the road (acr-ref
 # terrain-compare: 43% of the ground within 60 m of the nz01r5 centreline has no collision triangle)
-road_mask_cm = 50               # render triangles with vertices, edge midpoints and centre over collision road cells are dropped
 fill_cell_cm = 100              # collision ground triangles whose centre is over no render terrain are drawn as a fill
 road_lift_cm = 2                # road section raised against z-fighting where the coplanar render terrain meets it
 hole_check_m = 60               # offline check: plan samples every 2 m within this of the centreline over drawn ground
@@ -99,7 +112,14 @@ road_uv0_along_m = 3.6
 road_uv1_along_m = 7.2
 road_traj_across_m = 5.5
 road_traj_along_m = 100
+road_uv3_world_m = [168.7, 194.2]   # UV3 as Hafren's plan mapping (mesh-uv: 168.7 x 194.2 m per unit) instead of the
+                                    #   mirrored trajectory: the layered material reads it at that scale; the trajectory
+                                    #   there drew long dark mud streaks along the road (in game 2026-11-01). Remove the
+                                    #   key for the old layout.
 road_color = [0, 128, 0, 10]    # RGBA vertex colour; Hafren's road vertices are R ~0, G 128, B 0, A mostly < 20
+road_edge_blend_m = 1.5         # with [road] smooth_edge: vertex green ramps to road_edge_green over the last metres to the edge
+road_edge_green = [255, 255]    #   per side (across > 0 = right, across < 0 = left); green up = more of the light loose gravel
+                                #   layer (tested in game 2026-11-01: 255 thins the dark gravel into the verge, 0 darkens it)
 road_follow_max_m = 15          # road-surface triangles further from the DR2 centreline (side roads) get world-planar UVs
 road_stretch_min_fraction = 0.95  # offline check: road triangles whose UV0 scale is within 1.5x of nominal
 
@@ -126,6 +146,8 @@ road = "nz_ral_set_1_01_d1049518591_slice2"      # road strip: gravel with grass
 # slice, box-projected every terrain_tile_m, instead of the top-down ground bake (which streaks on banks)
 steep = "nz_ral_set_1_01_d1049518591_slice14"
 steep_min_deg = 40
+steep_min_height_m = 0.6        # v1.16: and in a connected patch of steep faces at least this tall (a small patch, e.g. a kerb
+                                #   at the verge, keeps the ground colour; with the rock it showed as light wedges)
 steep_acr_texture = "/Game/Props/MonteCarloProps/MonBolRockfaces/T_RockSurfaceSbcjgap0_B"   # ACR tileable rock (used
                                  #   instead of the DR2 slice when set; the M_Simple MIC references it)
 steep_tile_m = 4

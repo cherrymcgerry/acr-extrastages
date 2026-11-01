@@ -16,13 +16,7 @@ AcrExtraStages install --only AcrXsNz01r5 --native-props --acr-ground --acr-road
 | `--acr-ground` | The DR2 ground colours get an ACR detail normal map (surface detail up close). |
 | `--acr-road` | The road uses Hafren's layered 4K gravel material instead of DR2's road texture. |
 
-![New Zealand with ACR assets: ACR trees and shrubs, the gravel road material, rock texture on the bank](media/nz-acr-assets-forest.jpg)
-
-![Open hillside: ACR shrubs, high grass and tape poles beside the ACR gravel road](media/nz-acr-assets-hills.jpg)
-
-![Cockpit view at 0.8 km](media/nz-acr-assets-cockpit.jpg)
-
-![ACR props near the road: parked van and car, "No Public" signs](media/nz-acr-assets-props.jpg)
+![New Zealand start line with ACR assets: ACR shrubs and trees, the ACR gravel road with organic edges and grass over the edge, rock texture on the bank](media/nz-acr-start.jpg)
 
 Everything stays render-only: car collision is still DR2's (Kunos BakedData), so props do not change the driving line.
 

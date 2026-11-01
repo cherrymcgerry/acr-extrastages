@@ -22,6 +22,7 @@ internal static class ProcMesh
         public List<Vector2> Uv1 = new(), Uv2 = new(), Uv3 = new();  // optional: written when filled for every vertex
         public List<uint> Idx = new();
         public uint Color = 0xFFFFFFFF;            // BGRA bytes as written
+        public List<uint> Colors = new();          // optional per-vertex colours (BGRA); Color when empty
         public bool Collision;                     // keep false: the car uses Kunos BakedData, not UE collision
     }
 
@@ -101,7 +102,7 @@ internal static class ProcMesh
                                         else throw new InvalidDataException("bFlipTangentY set");
                                     }
                                     break;
-                                case 3: s.Color = BitConverter.ToUInt32(d, p); p += 4; break;
+                                case 3: s.Color = BitConverter.ToUInt32(d, p); s.Colors.Add(s.Color); p += 4; break;
                                 case 4: s.Uv.Add(new Vector2((float)BitConverter.ToDouble(d, p), (float)BitConverter.ToDouble(d, p + 8))); p += 16; break;
                                 case 5 or 6 or 7:
                                     extra[f.Index - 5].Add(new Vector2((float)BitConverter.ToDouble(d, p), (float)BitConverter.ToDouble(d, p + 8))); p += 16; break;
@@ -133,6 +134,7 @@ internal static class ProcMesh
     {
         if (s.Pos.Count != s.Nrm.Count || s.Pos.Count != s.Uv.Count) throw new ArgumentException("vertex attribute counts differ");
         if (new[] { s.Uv1, s.Uv2, s.Uv3 }.Any(l => l.Count != 0 && l.Count != s.Pos.Count)) throw new ArgumentException("UV1..UV3 must be empty or one per vertex");
+        if (s.Colors.Count != 0 && s.Colors.Count != s.Pos.Count) throw new ArgumentException("Colors must be empty or one per vertex");
         Unv.WriteHeader(w, [new(0, s.Pos.Count == 0), new(1, s.Idx.Count == 0), new(2, false), new(3, !s.Collision), new(4, false)]);
         if (s.Pos.Count > 0)
         {
@@ -150,7 +152,7 @@ internal static class ProcMesh
                 W3(w, s.Pos[i]); W3(w, n);
                 Unv.WriteHeader(w, [new(0, false), new(1, true)]);
                 W3(w, tangent);
-                w.Write(s.Color);
+                w.Write(s.Colors.Count == s.Pos.Count ? s.Colors[i] : s.Color);
                 foreach (var uv in new[] { s.Uv[i], u1, u2, u3 })
                     if (uv != Vector2.Zero) { w.Write((double)uv.X); w.Write((double)uv.Y); }
             }

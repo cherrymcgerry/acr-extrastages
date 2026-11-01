@@ -211,7 +211,7 @@ internal static class NativeProps
         var grassMesh = cfg.Str("native_props", "grass_mesh");
         double density = Opt(cfg, "grass_per_100m2", 20) / 1e6, gMin = Opt(cfg, "grass_min_offset_m", 3) * 100, gMax = Opt(cfg, "grass_max_offset_m", 18) * 100;
         double ramp = Opt(cfg, "grass_ramp_m", 4) * 100, gSlope = Math.Tan(Opt(cfg, "grass_max_slope_deg", 35) * Math.PI / 180);
-        int gDropped = 0;
+        int gDropped = 0, eCount = 0;
         if (density > 0)
         {
             var gm = plan.Meshes[grassMesh] = NativeFoliage.LoadMesh(provider, grassMesh);
@@ -239,6 +239,47 @@ internal static class NativeProps
                     plan.Grass.Add(Plant.Yawed(q with { Z = h * 100 - 3 }, yaw, sc, sc));
                 }
             }
+            // v1.16 edge grass: vanilla gravel roads have no edge line, tufts grow over the outer gravel. Small clumps
+            // every edge_grass_spacing_m along both sides (a random edge_grass_keep share of them), centred
+            // edge_grass_out_m beyond the road surface's edge (found by stepping out from the centreline), so their
+            // blades reach over it; the ground there is no steeper than grass_max_slope_deg.
+            double eSpace = Opt(cfg, "edge_grass_spacing_m", 0) * 100, eKeep = Opt(cfg, "edge_grass_keep", 0.7);
+            double eOut0 = Opt(cfg, "edge_grass_out_min_m", 0) * 100, eOut1 = Opt(cfg, "edge_grass_out_max_m", 0.5) * 100;
+            double eSc0 = Opt(cfg, "edge_grass_scale_min", 0.5), eSc1 = Opt(cfg, "edge_grass_scale_max", 1.0);
+            if (eSpace > 0)
+            {
+                var erng = new Random(23456);
+                for (int i = 0; i + 1 < centre.Count; i++)
+                {
+                    var a = centre[i]; var b = centre[i + 1];
+                    var d = new V3(b.X - a.X, b.Y - a.Y, 0); double len = d.Length;
+                    if (len < 1) continue;
+                    var dir = d * (1 / len); var nrm = new V3(-dir.Y, dir.X, 0);
+                    for (double ja = erng.NextDouble() * eSpace; ja < len; ja += eSpace * (0.6 + 0.8 * erng.NextDouble()))
+                        foreach (int side in new[] { -1, 1 })
+                        {
+                            double keep = erng.NextDouble(), yaw = erng.NextDouble() * 360, sc = eSc0 + (eSc1 - eSc0) * erng.NextDouble();
+                            double out0 = eOut0 + (eOut1 - eOut0) * erng.NextDouble();
+                            if (keep > eKeep) continue;
+                            var p0 = new V3(a.X + dir.X * ja, a.Y + dir.Y * ja, 0);
+                            // the road surface's edge: first point off it stepping out 10 cm at a time, the outermost of
+                            // three lines 0.75 m apart (the road's edge is saw-toothed; the drawn road follows the tips)
+                            double edge = -1;
+                            foreach (double dl in new[] { -75.0, 0, 75 })
+                                for (double step = 100; step <= gMin + 300; step += 10)
+                                    if (!objs.Probe.OnRoadSurface(p0.X + dir.X * dl + nrm.X * side * step, p0.Y + dir.Y * dl + nrm.Y * side * step))
+                                    { edge = Math.Max(edge, step); break; }
+                            if (edge < 0) continue;
+                            var q = new V3(p0.X + nrm.X * side * (edge + out0), p0.Y + nrm.Y * side * (edge + out0), 0);
+                            if (DistToCentre(q) < edge - 50) continue;       // inside a bend of another road leg
+                            if (ground.HeightAt(q.X / 100, q.Y / 100) is not { } h) continue;
+                            double hx = ground.HeightAt((q.X + 100) / 100, q.Y / 100) ?? h, hy = ground.HeightAt(q.X / 100, (q.Y + 100) / 100) ?? h;
+                            if (Math.Max(Math.Abs(hx - h), Math.Abs(hy - h)) > gSlope) continue;
+                            plan.Grass.Add(Plant.Yawed(q with { Z = h * 100 - 3 }, yaw, sc, sc));
+                            eCount++;
+                        }
+                }
+            }
         }
 
         plan.Report = new JsonObject
@@ -252,7 +293,7 @@ internal static class NativeProps
             ["singles_without_host"] = singles.Count - placed.Count,
             ["singles_farthest_placed_m"] = placed.Count > 0 ? Math.Round(placed[^1].s.Dist / 100, 1) : null,
             ["replaced_dr2_objects"] = plan.Replaced.Count,
-            ["grass_clumps"] = plan.Grass.Count, ["grass_dropped_touching_road"] = gDropped,
+            ["grass_clumps"] = plan.Grass.Count, ["grass_dropped_touching_road"] = gDropped, ["edge_grass_clumps"] = eCount,
             ["hide_markers"] = plan.HideMarkers,
         };
         return plan;
