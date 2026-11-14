@@ -311,7 +311,14 @@ internal static class Registry
                 BinaryPrimitives.WriteDoubleLittleEndian(e, Math.Round(route.MinY + off));
                 BinaryPrimitives.WriteDoubleLittleEndian(e.AsSpan(8), Math.Round(route.MaxY + off));
                 r.Set(I("DBTrackVariant", "Elevation"), e);
-                r.Set(I("DBTrackVariant", "ElevationAtStart"), BitConverter.GetBytes((float)(route.Points[0].y + off)));
+                // ElevationAtStart is TOptional<float>: keep the template's set-flag bytes and replace the trailing float
+                // (writing a bare float dropped the flag and made the row unreadable)
+                int startIdx = I("DBTrackVariant", "ElevationAtStart");
+                var cur = r.Get(startIdx);
+                if (cur.Zero || cur.Bytes.Length < 5) throw new InvalidDataException($"{v.Row}: template has no ElevationAtStart value to patch");
+                var start = (byte[])cur.Bytes.Clone();
+                BinaryPrimitives.WriteSingleLittleEndian(start.AsSpan(start.Length - 4), (float)(route.Points[0].y + off));
+                r.Set(startIdx, start);
             }
             Console.WriteLine($"  menu {v.Row}: {(m.Images ? "map / elevation images, " : "")}{(m.Images && m.Art is not null ? $"art {m.Art}, " : "")}sectors {string.Join(" + ", km)} km" +
                               (m.ElevationOffset is { } o2 ? $", elevation {route.MinY + o2:0}..{route.MaxY + o2:0} m (start {route.Points[0].y + o2:0})" : ""));
